@@ -14,6 +14,19 @@ and SRPO
 
 - Score regularization policy optimization
 
+## Time list
+
+- v0.1 Jan. 30, 2024. This is the version for JAL_Diffusion QL and Ind_Diffusion QL. 
+- v0.2 Mar. 25, 2024. Update JAL_SRPO
+
+
+TODO
+
+- IND_SRPO
+- CTDE_QMIX_SRPO
+- Seq_SRPO
+
+
 
 
 ## Requirements
