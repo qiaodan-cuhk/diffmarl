@@ -10,6 +10,7 @@ import argparse
 import numpy as np
 import datetime
 import random
+import tqdm
 
 # import gym
 from gym.spaces import Box, Discrete
@@ -21,12 +22,14 @@ from utils.make_env import make_env
 from utils.buffer import ReplayBuffer
 from utils.env_wrappers import DummyVecEnv
 
+# env check
 try:
     from multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
     print ('MujocoMulti not installed')
 
-from algorithms.madiffQL import MADiff, MADiff_JAL  #, MADiff_seq, MADiff_CTCE
+from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
+from algorithms.MASRPO import IND_SRPO
 
 # make parallel MA-Env
 def make_parallel_env(env_id, seed, discrete_action):
@@ -38,7 +41,6 @@ def make_parallel_env(env_id, seed, discrete_action):
         return env
 
     return DummyVecEnv([get_env_fn(0)])
-
 
 # evaluate policy in eval module with envs(seed+100)
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device, env_args=None):
@@ -124,14 +126,9 @@ def log_and_print(key, value, t, multi=False):
 
 def offline_train(config):
     unique_token = "{}__{}__seed{}".format(config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
-    
-    if config.JAL:
-        unique_token="JAL_"+unique_token
-    else:
-        if config.seq_update:
-            unique_token="seq_"+unique_token
-        else:
-            unique_token="ind_"+unique_token
+
+    unique_token = config.marltype+"_"+unique_token
+    # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
         outdir = os.path.join(config.dir, config.env_id, unique_token)
@@ -158,31 +155,55 @@ def offline_train(config):
     kwargs={'logging_interval': config.logging_interval,
             'no_log': config.no_log,
             'train_num_steps': config.num_steps}
- 
-    # select algorithms from [JAL, seq, ind]
-    if config.JAL:
-        algo_name = "JAL"
-        ma_agent = MADiff_JAL.init_from_env(env, env_id = config.env_id, env_info=env_info,
-                                            agent_alg="diffusion", adversary_alg="ddpg",
-                                            gamma=config.gamma, tau=config.tau, lr=config.lr,
-                                            hidden_dim = config.hidden_dim, denoise_steps = config.T,
-                                            batch_size=config.batch_size, device = config.device, **kwargs)
-        print("MA Diff-QL with joint actions agents have been created")
-    else:
-        if config.seq_update:
-            algo_name = "Seq_ind"
-            pass
-            # ma_agent = MADiff_seq.init_from_env()   # to be finished in algo/madiffQL
-            print("Sequential update independent Diff-QL agents have been created")
-        else:
-            algo_name = "Ind"
+
+
+    # select algorithms from [JAL, ind, seq, VD] + [DiffusionQL, SRPO]
+    if config.difftype == "DQL":
+        if config.marltype == "JAL":
+            algo_name = "JAL_Diffusion-QL"
+            ma_agent = MADiff_JAL.init_from_env(env, env_id = config.env_id, env_info=env_info,
+                                                agent_alg="diffusion", adversary_alg="ddpg",
+                                                gamma=config.gamma, tau=config.tau, lr=config.lr,
+                                                hidden_dim = config.hidden_dim, denoise_steps = config.T,
+                                                batch_size=config.batch_size, device = config.device, **kwargs)
+            print("JAL-Diff-QL agents have been created")
+        elif config.marltype == "IND":
+            algo_name = "IND_Diffusion-QL"
             ma_agent = MADiff.init_from_env(env, env_id = config.env_id, env_info=env_info,
                                             agent_alg="diffusion", adversary_alg="ddpg",
                                             gamma=config.gamma, tau=config.tau, lr=config.lr,
                                             hidden_dim = config.hidden_dim, denoise_steps = config.T,
                                             batch_size=config.batch_size, device = config.device, **kwargs)
             print("Parallel update independent Diff-QL agents have been created")
-
+        else:
+            algo_name = "SEQ/VD_Diffusion-QL"
+            # ma_agent = MADiff_seq.init_from_env()   # to be finished in algo/madiffQL
+            print("Sequential update and VDN Diffusion-QL agents haven't been established")
+    elif config.difftype == "SRPO":
+        if config.marltype == "JAL":
+            algo_name = "JAL_SRPO"
+            ma_agent = JAL_SRPO.init_from_env(env, env_id = config.env_id, env_info=env_info,
+                                                agent_alg="diffusion", adversary_alg="ddpg",
+                                                gamma=config.gamma, tau=config.tau, lr=config.lr,
+                                                hidden_dim = config.hidden_dim, denoise_steps = config.T,
+                                                batch_size=config.batch_size, device = config.device, config=config, **kwargs)
+            print("JAL-SRPO agents have been created")
+        elif config.marltype == "IND":
+            algo_name = "IND_SRPO"
+            ma_agent = IND_SRPO.init_from_env(env, env_id = config.env_id, env_info=env_info,
+                                            agent_alg="diffusion", adversary_alg="ddpg",
+                                            gamma=config.gamma, tau=config.tau, lr=config.lr,
+                                            hidden_dim = config.hidden_dim, denoise_steps = config.T,
+                                            batch_size=config.batch_size, device = config.device, config=config, **kwargs)
+            print("Parallel update independent SRPO agents have been created")
+            print(ma_agent.init_dict)
+        else:
+            algo_name = "SEQ/VD_SRPO"
+            # ma_agent = MADiff_seq.init_from_env()   # to be finished in algo/madiffQL
+            print("Sequential update and VDN Diffusion-QL agents haven't been established")
+    else:
+        print("Neither SRPO nor Diffusion-QL have been selected. Choose valid diffusion model")
+            
 
     # load pretrained preys model to DDPG
     if config.env_id in ['simple_tag', 'simple_world']:
@@ -211,6 +232,9 @@ def offline_train(config):
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
     print('Average_reward:', replay_buffer.ave_reward)
 
+
+    """这一段要去检查 SRPO 的 D4RL Dataset 怎么写的"""
+
     # tensorboard log dir and save configurations
     if not config.no_log:
         configure(outdir)
@@ -230,8 +254,11 @@ def offline_train(config):
             json.dump(config_log_dict, f)
 
 
-    # train process
+    # training process
     ma_agent.prep_training(device=config.device)
+
+    progress_bar = tqdm(range(config.num_steps+1), desc = 'Training Process', leave=True)
+
     for t in range(config.num_steps + 1):
         # set as eval() when eval
         if t % config.eval_interval == 0 or t == config.num_steps:
@@ -244,12 +271,9 @@ def offline_train(config):
             ma_agent.prep_training(device=config.device)
                 
         # load joint datasets for JAL and indpendent trajectory for ind/seq training
-        if config.JAL:
+        if config.marltype == "JAL":
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             ma_agent.update(sample, t)  
-
-            if t % config.logging_interval == 0 and not config.no_log:
-                print('-'*30, 'training process {} %'.format(100*t/config.num_steps), '-'*30)
         else:
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
@@ -258,15 +282,12 @@ def offline_train(config):
             for a_i in range(nagents):
                 sample_i = samples[a_i]
                 ma_agent.update(sample_i, a_i, t)
-
-            if t % config.logging_interval == 0 and not config.no_log:
-                print('-'*20, 'training process {} %'.format(100*t/config.num_steps), '-'*20)
+        progress_bar.update(1)
 
     try:
         env.close()
-    except:
-        pass
-
+    except Exception as e:
+        print(f"An error occurred while closing the environment: {e}")
 
 
 if __name__ == '__main__':
@@ -278,16 +299,17 @@ if __name__ == '__main__':
     parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
-    # Algo choice: JAL/ind/seq
-    parser.add_argument("--JAL", action='store_true')
-    parser.add_argument("--seq_update", action='store_true')
+    # Algo choice: Diffusion QL or SRPO
+    parser.add_argument("--difftype", default='DQL') # DQL for Diffusion-QL, SRPO for SRPO algo
+    # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
+    parser.add_argument("--marltype", default='JAL') # JAL, IND, VD, SEQ
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
     parser.add_argument("--beta_schedule", default='vp', type=str)
     parser.add_argument("--seed", default=0, type=int, help="Random seed")
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    parser.add_argument("--device", default=1, type=int, help='cuda number')
+    parser.add_argument("--device", default=0, type=int, help='cuda number')
 
     """   Unchangeable Params   """
     # log and save dir
@@ -320,6 +342,28 @@ if __name__ == '__main__':
     parser.add_argument("--logging_interval", default=500, type=int)
     parser.add_argument("--no_log", action='store_true')
 
+    ######### args for SRPO To be revise #########
+    # parser.add_argument("--env", default="halfcheetah-medium-expert-v2") # OpenAI gym environment name
+    # parser.add_argument("--seed", default=0, type=int)             # Sets Gym, PyTorch and Numpy seeds
+    # parser.add_argument("--expid", default="default", type=str)    
+    # parser.add_argument("--device", default="cuda", type=str)      
+    
+    parser.add_argument("--save_model", default=1, type=int)       
+    parser.add_argument('--debug', type=int, default=0)
+    parser.add_argument('--beta', type=float, default=None)       
+    parser.add_argument('--actor_load_path', type=str, default=None)
+    parser.add_argument('--critic_load_path', type=str, default=None)
+    parser.add_argument('--policy_batchsize', type=int, default=256)              
+    parser.add_argument('--actor_blocks', type=int, default=3)     
+    parser.add_argument('--z_noise', type=int, default=1)
+    parser.add_argument('--WT', type=str, default="VDS")
+    parser.add_argument('--q_layer', type=int, default=2)
+    parser.add_argument('--n_policy_epochs', type=int, default=100)
+    parser.add_argument('--policy_layer', type=int, default=None)
+    parser.add_argument('--critic_load_epochs', type=int, default=150)
+    parser.add_argument('--regq', type=int, default=0)
+    ##################################################
+
     config = parser.parse_args()
 
     if config.use_gpu:
@@ -346,7 +390,7 @@ if __name__ == '__main__':
         config.tau = 0.005
         config.gamma = 0.99
 
-    if config.JAL:
+    if config.marltype == 'JAL':
         config.T=20
         
     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
