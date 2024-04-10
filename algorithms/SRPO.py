@@ -24,7 +24,7 @@ class SRPO(nn.Module):
     
     # 这里要适配一下 MARL dataset
     def update_SRPO_policy(self, data):
-        s = data['s']
+        s = data['s']        
         self.diffusion_behavior.eval()
         a = self.SRPO_policy(s)
         t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
@@ -72,7 +72,8 @@ class SRPO(nn.Module):
         self.SRPO_policy_lr_scheduler.step()
         self.diffusion_behavior.train()
 
-        # return loss
+        return loss, episilon, guidance
+
 
 
 # used in train_behavior.py
@@ -134,7 +135,7 @@ class SRPO_IQL(nn.Module):
             target_q = self.q[0].q0_target(a, s).detach()
             v = self.q[0].vf(s).detach()
         adv = target_q - v
-        temp = 10.0 if "maze" in self.args.env else 3.0
+        temp = 10.0 if "maze" in self.args.env_id else 3.0
         exp_adv = torch.exp(temp * adv.detach()).clamp(max=100.0)
 
         policy_out = self.deter_policy(s)
@@ -167,7 +168,7 @@ class IQL_Critic(nn.Module):
         self.v_optimizer = torch.optim.Adam(self.vf.parameters(), lr=3e-4)
         self.discount = 0.99
         self.args = args
-        self.tau = 0.9 if "maze" in args.env else 0.7
+        self.tau = 0.9 if "maze" in args.env_id else 0.7
         print(self.tau)
 
     def update_q0(self, data):

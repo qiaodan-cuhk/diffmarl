@@ -308,7 +308,7 @@ class MADiff_JAL(object):
   
         self.agent_init_params = agent_init_params
         # in JAL, the state and action dim are multiplex by agent numbers
-        self.state_dim = self.agent_init_params[0]['state_dim'] * self.nagents
+        self.state_dim = self.agent_init_params[0]['state_dim'] * self.nagents  # use concate obs as input
         self.action_dim = self.agent_init_params[0]['action_dim'] * self.nagents
         self.device = device
         

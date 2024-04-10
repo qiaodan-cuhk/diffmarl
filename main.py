@@ -1,8 +1,8 @@
 # Diffusion-QL Copyright 2022 Twitter, Inc and Zhendong Wang.
 # Framework copyright. CFCQL and OMAR
 
-# Algorithm: JAL_DQ, ind_DQ, 
-# ToDO Algo: JAL_SRPO, ind_SRPO, CTDE_SRPO, CTDE_DQ
+# Algorithm: JAL_DQ, ind_DQ, ind_SRPO
+# ToDO Algo: JAL_SRPO, CTDE_SRPO, CTDE_DQ, Pretrain diffusion & critic
 
 import os, sys, tempfile
 import json
@@ -10,7 +10,7 @@ import argparse
 import numpy as np
 import datetime
 import random
-import tqdm
+from tqdm import tqdm
 
 # import gym
 from gym.spaces import Box, Discrete
@@ -29,7 +29,7 @@ except:
     print ('MujocoMulti not installed')
 
 from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
-from algorithms.MASRPO import IND_SRPO
+from algorithms.MASRPO import IND_SRPO, JAL_SRPO    # VD_SRPO, Seq_SRPO
 
 # make parallel MA-Env
 def make_parallel_env(env_id, seed, discrete_action):
@@ -232,13 +232,9 @@ def offline_train(config):
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
     print('Average_reward:', replay_buffer.ave_reward)
 
-
-    """这一段要去检查 SRPO 的 D4RL Dataset 怎么写的"""
-
     # tensorboard log dir and save configurations
     if not config.no_log:
         configure(outdir)
-
         config_log_dict = {"env": config.env_id,
                            "dataset": "{}_{}".format(config.data_type, config.dataset_num),
                            "dataset_ave_reward": replay_buffer.ave_reward,
@@ -274,14 +270,21 @@ def offline_train(config):
         if config.marltype == "JAL":
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             ma_agent.update(sample, t)  
-        else:
+            # 这里一个可能的问题是，JAL需不需要区分pray的数据
+
+        elif config.marltype == "IND":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             
             # keep each agent data in one batch
+            # independent learning 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
                 sample_i = samples[a_i]
                 ma_agent.update(sample_i, a_i, t)
+        else:
+            pass
+            # 对于seq和ctde需要添加额外的更新方法
+                
         progress_bar.update(1)
 
     try:
@@ -289,6 +292,13 @@ def offline_train(config):
     except Exception as e:
         print(f"An error occurred while closing the environment: {e}")
 
+# Pretrain SRPO_behavior and SRPO_critic for MARL version
+        
+temperature_coefficients = {"simple_spread": 0.08,
+                            "halfcheetah-medium-expert-v2": 0.01,
+                            "halfcheetah-medium-v2": 0.2, 
+                            "halfcheetah-medium-replay-v2": 0.2}
+# change into MARL version
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -335,27 +345,24 @@ if __name__ == '__main__':
 
     # params for evaluation
     parser.add_argument('--eval_episodes', default=10, type=int)
-    parser.add_argument('--eval_interval', default=2000, type=int)
-    parser.add_argument('--num_steps', default=int(1e5), type=int)
+    parser.add_argument('--eval_interval', default=10000, type=int)
+    parser.add_argument('--num_steps', default=int(1e7), type=int)
 
     # params for logging
     parser.add_argument("--logging_interval", default=500, type=int)
     parser.add_argument("--no_log", action='store_true')
 
     ######### args for SRPO To be revise #########
-    # parser.add_argument("--env", default="halfcheetah-medium-expert-v2") # OpenAI gym environment name
-    # parser.add_argument("--seed", default=0, type=int)             # Sets Gym, PyTorch and Numpy seeds
-    # parser.add_argument("--expid", default="default", type=str)    
-    # parser.add_argument("--device", default="cuda", type=str)      
+    
     
     parser.add_argument("--save_model", default=1, type=int)       
-    parser.add_argument('--debug', type=int, default=0)
+    # parser.add_argument('--debug', type=int, default=0)
     parser.add_argument('--beta', type=float, default=None)       
     parser.add_argument('--actor_load_path', type=str, default=None)
     parser.add_argument('--critic_load_path', type=str, default=None)
-    parser.add_argument('--policy_batchsize', type=int, default=256)              
+    # parser.add_argument('--policy_batchsize', type=int, default=256)              
     parser.add_argument('--actor_blocks', type=int, default=3)     
-    parser.add_argument('--z_noise', type=int, default=1)
+    # parser.add_argument('--z_noise', type=int, default=1)
     parser.add_argument('--WT', type=str, default="VDS")
     parser.add_argument('--q_layer', type=int, default=2)
     parser.add_argument('--n_policy_epochs', type=int, default=100)
@@ -365,6 +372,16 @@ if __name__ == '__main__':
     ##################################################
 
     config = parser.parse_args()
+
+    # config.env 替换为 config.env_id
+    if config.beta is None:
+        config.beta = temperature_coefficients[config.env_id]
+
+    if config.policy_layer is None:
+        config.policy_layer=4 if "maze" in config.env_id else 2
+
+    if "maze" in config.env_id:
+        config.regq = 1
 
     if config.use_gpu:
         config.device = f"cuda:{config.device}"
@@ -396,3 +413,4 @@ if __name__ == '__main__':
     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
         
     offline_train(config)
+

@@ -80,6 +80,8 @@ class ReplayBuffer(object):
 
                 bf.append(agent_data)
 
+        # data structure: [{1} {2} ... {N}]
+
         return bf
 
     def load_batch_data(self, dir, rew_scale=1.0):
