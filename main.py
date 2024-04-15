@@ -29,7 +29,7 @@ except:
     print ('MujocoMulti not installed')
 
 from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
-from algorithms.MASRPO import IND_SRPO, JAL_SRPO    # VD_SRPO, Seq_SRPO
+from algorithms.MASRPO import IND_SRPO, JAL_SRPO, SEQ_SRPO    # VD_SRPO, Seq_SRPO
 
 # make parallel MA-Env
 def make_parallel_env(env_id, seed, discrete_action):
@@ -124,6 +124,48 @@ def log_and_print(key, value, t, multi=False):
         log_value(key, value, t)
 
 
+def load_SRPO_critic(srpo_model, load_path, srpo_type):
+
+    # args.critic_load_path = "path/to/yout/ckpt/file"
+    # if IND, just load individual pretrained Q value
+    # if CTDE/JAL, load joint pretrained Q value
+    if load_path is not None:
+        print("loading critic...")
+        if srpo_type == 'IND' or 'CTDE':
+            for srpo_i in srpo_model.agents:
+                # SRPO_models/exp_seed/  srpo_type/critic_i,actor_i.pth
+                agent_index = srpo_i
+                load_path_i = os.path.join(load_path, srpo_type, f'critic_{agent_index}.pth')
+                ckpt = torch.load(load_path_i, map_location=srpo_model.device)
+                srpo_i.q[0].load_state_dict(ckpt)
+        elif srpo_type == 'JAL':
+            # SRPO_models/exp_seed/ + JAL/critic.pth
+            load_path = os.path.join(load_path, srpo_type, f'critic.pth')
+            ckpt = torch.load(load_path, map_location=srpo_model.device)
+            srpo_model.q[0].load_state_dict(ckpt)
+    else:
+        assert False
+
+def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
+    if load_path is not None:
+        print("loading actor...")
+        if srpo_type == 'IND' or 'CTDE':
+            for srpo_i in srpo_model.agents:
+                # SRPO_premodels/exp_seed/  CTDE/diffusion_i.pth
+                agent_index = srpo_i
+                load_path_i = os.path.join(load_path, srpo_type, f'diffusion_{agent_index}.pth')
+                ckpt = torch.load(load_path_i, map_location=srpo_model.device)
+                srpo_i.diffusion_behavior.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
+        elif srpo_type == 'JAL':
+            # SRPO_premodels/exp_seed/ + JAL/diffusion.pth
+            load_path = os.path.join(load_path, srpo_type, f'diffusion.pth')
+            ckpt = torch.load(load_path_i, map_location=srpo_model.device)
+            srpo_model.diffusion_behavior.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
+    else:
+        assert False
+
+
+
 def offline_train(config):
     unique_token = "{}__{}__seed{}".format(config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
 
@@ -180,6 +222,7 @@ def offline_train(config):
             # ma_agent = MADiff_seq.init_from_env()   # to be finished in algo/madiffQL
             print("Sequential update and VDN Diffusion-QL agents haven't been established")
     elif config.difftype == "SRPO":
+        # SRPO needs pretrained critic and diffusion
         if config.marltype == "JAL":
             algo_name = "JAL_SRPO"
             ma_agent = JAL_SRPO.init_from_env(env, env_id = config.env_id, env_info=env_info,
@@ -197,19 +240,32 @@ def offline_train(config):
                                             batch_size=config.batch_size, device = config.device, config=config, **kwargs)
             print("Parallel update independent SRPO agents have been created")
             print(ma_agent.init_dict)
-        else:
-            algo_name = "SEQ/VD_SRPO"
-            # ma_agent = MADiff_seq.init_from_env()   # to be finished in algo/madiffQL
-            print("Sequential update and VDN Diffusion-QL agents haven't been established")
+        elif config.marltype == 'CTDE':
+            algo_name = "SEQ_SRPO"
+            ma_agent = SEQ_SRPO.init_from_env(env, env_id = config.env_id, env_info=env_info,
+                                            agent_alg="diffusion", adversary_alg="ddpg",
+                                            gamma=config.gamma, tau=config.tau, lr=config.lr,
+                                            hidden_dim = config.hidden_dim, denoise_steps = config.T,
+                                            batch_size=config.batch_size, device = config.device, config=config, **kwargs)
+            print("Sequential update SRPO agents haven't been established")
     else:
         print("Neither SRPO nor Diffusion-QL have been selected. Choose valid diffusion model")
             
+    # load pretrained critics and diffusion to SRPO
+    if config.critic_load_path is not None:
+        load_SRPO_critic(srpo_model=ma_agent, load_path=config.critic_load_path, srpo_type=config.marltype)
+    else:
+        assert False
+
+    if config.diffusion_load_path is not None:
+        load_SRPO_diffusion(srpo_model=ma_agent, load_path=config.actor_load_path, srpo_type=config.marltype)
+    else:
+        assert False
 
     # load pretrained preys model to DDPG
     if config.env_id in ['simple_tag', 'simple_world']:
         pretrained_model_dir = './datasets/{}/pretrained_adv_model.pt'.format(config.env_id)
         ma_agent.load_pretrained_preys(pretrained_model_dir)
-
 
     # load full offline datasets to buffer
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
@@ -272,18 +328,17 @@ def offline_train(config):
             ma_agent.update(sample, t)  
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
 
-        elif config.marltype == "IND":
+        elif config.marltype == "IND" or "CTDE":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
-            
-            # keep each agent data in one batch
-            # independent learning 只拿agent i自己的buffer，并只更新a i策略
+
+            # 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
                 sample_i = samples[a_i]
                 ma_agent.update(sample_i, a_i, t)
-        else:
+        else:  # QMIX_SRPO
             pass
-            # 对于seq和ctde需要添加额外的更新方法
+            
                 
         progress_bar.update(1)
 
@@ -295,9 +350,7 @@ def offline_train(config):
 # Pretrain SRPO_behavior and SRPO_critic for MARL version
         
 temperature_coefficients = {"simple_spread": 0.08,
-                            "halfcheetah-medium-expert-v2": 0.01,
-                            "halfcheetah-medium-v2": 0.2, 
-                            "halfcheetah-medium-replay-v2": 0.2}
+                            "HalfCheetah-v2": 0.02}
 # change into MARL version
 
 if __name__ == '__main__':
@@ -305,14 +358,14 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")
+    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")
     parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
-    parser.add_argument("--difftype", default='DQL') # DQL for Diffusion-QL, SRPO for SRPO algo
+    parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
-    parser.add_argument("--marltype", default='JAL') # JAL, IND, VD, SEQ
+    parser.add_argument("--marltype", default='CTDE') # JAL, IND, VD, SEQ
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
@@ -360,6 +413,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=None)       
     parser.add_argument('--actor_load_path', type=str, default=None)
     parser.add_argument('--critic_load_path', type=str, default=None)
+    parser.add_argument('--diffusion_load_path', type=str, default=None)
     # parser.add_argument('--policy_batchsize', type=int, default=256)              
     parser.add_argument('--actor_blocks', type=int, default=3)     
     # parser.add_argument('--z_noise', type=int, default=1)

@@ -18,13 +18,103 @@ and SRPO
 
 - v0.1 Jan. 30, 2024. This is the version for JAL_Diffusion QL and Ind_Diffusion QL. 
 - v0.2 Mar. 25, 2024. Update JAL_SRPO
+- v0.3 April 15, 2024. Update IND_SRPO, CTDE(SEQ)_SRPO
 
 
 TODO
 
-- IND_SRPO
-- CTDE_QMIX_SRPO
-- Seq_SRPO
+- QMIX_SRPO
+
+## Code Structure
+
+diffmarl/
+
+- main.py
+    - make_parallel_env
+    - eval_policy
+    - log_and_print
+    - load_SRPO_critic
+    - load_SRPO_diffusion
+
+    - offline_train
+        - make(env_id)
+        - kwargs
+        - ma_agent & algo_name
+        - load critic and diffusion for SRPO
+        - load DDPG for preys
+        - replay_buffer loading
+        - config.json dump
+        - training process
+            - prep training
+            - load samples
+            - update with samples
+
+    - __main_
+        - args = parser
+        - offline_train(args)
+
+- algorithms
+    - MASRPO
+        - IND_SRPO
+            - self.agents = [SRPO/SRPO_CTDE]
+            - self.preys = [DDPG]
+            - step
+            - update
+            - prep_training/rollout
+            - load_pretrain_preys
+            - init_from_env
+        - JAL_SRPO
+        - SEQ_SRPO
+    - SRPO
+        - SRPO(CTDE)
+            - self.diff = ScoreNet_IDQL
+            - self.policy = Dilac
+            - self.q = IQL_Critic
+            - update policy
+
+        - SRPO_behavior
+            - self.diff = ScoreNet_IDQL
+            - update behavior
+
+        - SRPO_IQL
+            - self.deter_policy = Dilac
+            - self.q = IQL_Critic
+            - update_iql
+
+        - IQL_Critic
+            - self.q = TwinQ
+            - self.vf = V
+            - update q with L2 loss + soft target
+
+
+- pretrain_behavior.py
+    - train_IND/JAL_behavior
+    - critic(args)
+    - get args
+    - SRPO_behavior
+
+- pretrain_critic.py
+    - train_IND/JAL_critic
+    - critic(args)
+    - get args
+    - SRPO_IQL
+
+- SRPO_premodels
+    - expid
+        - JAL
+        - CTDE
+        - IND
+            - seed
+
+- datasets
+    - Mujoco
+    - MPE
+
+- utils
+- results
+- envs
+
+
 
 
 

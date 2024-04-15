@@ -65,6 +65,7 @@ class SRPO(nn.Module):
 
         # Q gradient + diffusion gradient (noise*sigma)
         loss = (episilon * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+        # max Q - epsilon = min epsilon - Q
         loss = loss.mean()
         self.SRPO_policy_optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -73,7 +74,131 @@ class SRPO(nn.Module):
         self.diffusion_behavior.train()
 
         return loss, episilon, guidance
+    
 
+# used for Seq_MASRPO, which loads joint Q and ind diffusion
+
+class SRPO_CTDE(nn.Module):
+    def __init__(self, input_dim, output_dim, marginal_prob_std, args=None):
+        super().__init__()
+        # diffusion model is individual
+        self.diffusion_behavior = ScoreNet_IDQL(input_dim, output_dim, marginal_prob_std, embed_dim=64, args=args)
+        self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=3e-4)
+        # SRPO dilac policy is individual
+        self.SRPO_policy = Dirac_Policy(output_dim, input_dim-output_dim, layer=args.policy_layer).to("cuda")
+        self.SRPO_policy_optimizer = torch.optim.Adam(self.SRPO_policy.parameters(), lr=3e-4)
+        self.SRPO_policy_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.SRPO_policy_optimizer, T_max=args.n_policy_epochs * 10000, eta_min=0.)
+
+        self.marginal_prob_std = marginal_prob_std
+        self.args = args
+        self.output_dim = output_dim
+        self.step = 0
+        
+        # input = state + action, output = action
+        # here we load a centralized/advantage Q value with IQL (can be replaced by ICQ/OMAR)
+        n_agent_numbers = len(args.alg_types)
+        self.q = []        
+        self.q.append(IQL_Critic(adim=output_dim*n_agent_numbers, sdim=input_dim-output_dim, args=args))
+    
+    # 这里要适配一下 MARL dataset
+    def update_SRPO_policy(self, data, prefix_policy, suffix_policy):
+        s = data['s']        
+
+        self.diffusion_behavior.eval()
+        [diff.diffusion_behavior.eval() for diff in prefix_policy]
+        [diff.diffusion_behavior.eval() for diff in suffix_policy]
+
+        a = self.SRPO_policy(s)
+
+        a_pre = []
+        a_suf = []
+        for pre in prefix_policy:
+            a_pre.append(pre.SRPO_policy(s))
+        for suf in suffix_policy:
+            a_suf.append(suf.SRPO_policy(s))
+
+
+        t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
+        # random noising time t
+        alpha_t, std = self.marginal_prob_std(t)
+        z = torch.randn_like(a)
+        perturbed_a = a * alpha_t[..., None] + z * std[..., None]
+        # add noise to policy action, generate a_t
+
+        perturbed_a_pre = []
+        perturbed_a_suf = []
+
+        for pre in len(prefix_policy):
+            p_a_pre = a_pre[pre] * alpha_t[..., None] + z * std[..., None]
+            perturbed_a_pre.append()
+
+        for suf in len(suffix_policy):
+            p_a_suf = a_suf[suf] * alpha_t[..., None] + z * std[..., None]
+            perturbed_a_suf.append()
+
+
+        with torch.no_grad():
+            episilon = self.diffusion_behavior(perturbed_a, t, s).detach()  # diffusion model prediction
+            epi_pre = []
+            epi_suf = []
+            for pre in len(prefix_policy):
+                epi_pre_i = prefix_policy[pre].diffusion_behavior(p_a_pre, t, s).detach()
+                epi_pre.append(epi_pre_i)
+            for suf in len(suffix_policy):
+                epi_suf_i = suffix_policy[pre].diffusion_behavior(p_a_suf, t, s).detach()
+                epi_suf.append(epi_suf_i)
+            
+
+            if "noise" in self.args.WT:
+                episilon = episilon - z
+                epi_pre = epi_pre - z
+                epi_suf = epi_suf - z
+
+        if "VDS" in self.args.WT:
+            wt = std ** 2
+        elif "stable" in self.args.WT:
+            wt = 1.0
+        elif "score" in self.args.WT:
+            wt = alpha_t / std
+        else:
+            assert False
+
+        # here we need to consider prefix agents' new policy and actions a'
+        detach_a = a.detach().requires_grad_(True)
+        """ others' a = xxx, a_joint = detach_a + others' a"""
+        a_pre = torch.tensor(a_pre)
+        a_suf = torch.tensor(a_suf)
+        detach_a_joint = torch.cat((a_pre, detach_a, a_suf), dim=0)
+
+        qs = self.q[0].q0_target.both(detach_a_joint , s)  # Dilac policy action and Q(s, a)
+        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0
+        self.SRPO_policy.q = torch.mean(q)
+
+
+        guidance =  torch.autograd.grad(torch.sum(q), detach_a)[0].detach()
+        # dq/da gradient
+
+        if self.args.regq:
+            guidance_norm = torch.mean(guidance ** 2, dim=-1, keepdim=True).sqrt()
+            guidance = guidance / guidance_norm
+
+        # 这里可以把其他diff的score给进来，但是因为detach了所以是个常数，不影响梯度
+        # guidance只对当前的a保留梯度，
+        episilon_all = torch.cat((epi_pre, episilon, epi_suf), dim=0)
+        loss = (episilon_all * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+
+        # max Q - epsilon = min epsilon - Q
+        loss = loss.mean()
+        self.SRPO_policy_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.SRPO_policy_optimizer.step()
+        self.SRPO_policy_lr_scheduler.step()
+        self.diffusion_behavior.train()
+        [diff.diffusion_behavior.train() for diff in prefix_policy]
+        [diff.diffusion_behavior.train() for diff in suffix_policy]
+
+        return loss, episilon_all, guidance
+    
 
 
 # used in train_behavior.py
