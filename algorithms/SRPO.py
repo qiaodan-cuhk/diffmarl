@@ -99,7 +99,8 @@ class SRPO_CTDE(nn.Module):
         n_agent_numbers = len(args.alg_types)
         self.q = []        
         self.q.append(IQL_Critic(adim=output_dim*n_agent_numbers, sdim=input_dim-output_dim, args=args))
-    
+        # for mamujoco halfcheetah, state is 6 and action is 3*2
+
     # 这里要适配一下 MARL dataset
     def update_SRPO_policy(self, data, prefix_policy, suffix_policy):
         s = data['s']        
@@ -112,10 +113,16 @@ class SRPO_CTDE(nn.Module):
 
         a_pre = []
         a_suf = []
-        for pre in prefix_policy:
-            a_pre.append(pre.SRPO_policy(s))
-        for suf in suffix_policy:
-            a_suf.append(suf.SRPO_policy(s))
+        if len(prefix_policy) <= 0:
+            pass
+        else:
+            for pre in prefix_policy:
+                a_pre.append(pre.SRPO_policy(s))
+        if len(suffix_policy) <=0:
+            pass
+        else:
+            for suf in suffix_policy:
+                a_suf.append(suf.SRPO_policy(s))
 
 
         t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
@@ -128,25 +135,35 @@ class SRPO_CTDE(nn.Module):
         perturbed_a_pre = []
         perturbed_a_suf = []
 
-        for pre in len(prefix_policy):
-            p_a_pre = a_pre[pre] * alpha_t[..., None] + z * std[..., None]
-            perturbed_a_pre.append()
-
-        for suf in len(suffix_policy):
-            p_a_suf = a_suf[suf] * alpha_t[..., None] + z * std[..., None]
-            perturbed_a_suf.append()
-
+        if len(prefix_policy) <= 0:
+            pass
+        else:
+            for pre in range(len(prefix_policy)):
+                p_a_pre = a_pre[pre] * alpha_t[..., None] + z * std[..., None]
+                perturbed_a_pre.append(p_a_pre)
+        if len(suffix_policy) <=0:
+            pass
+        else:
+            for suf in range(len(suffix_policy)):
+                p_a_suf = a_suf[suf] * alpha_t[..., None] + z * std[..., None]
+                perturbed_a_suf.append(p_a_suf)
 
         with torch.no_grad():
             episilon = self.diffusion_behavior(perturbed_a, t, s).detach()  # diffusion model prediction
             epi_pre = []
             epi_suf = []
-            for pre in len(prefix_policy):
-                epi_pre_i = prefix_policy[pre].diffusion_behavior(p_a_pre, t, s).detach()
-                epi_pre.append(epi_pre_i)
-            for suf in len(suffix_policy):
-                epi_suf_i = suffix_policy[pre].diffusion_behavior(p_a_suf, t, s).detach()
-                epi_suf.append(epi_suf_i)
+            if len(prefix_policy) <= 0:
+                pass
+            else:
+                for pre in range(len(prefix_policy)):
+                    epi_pre_i = prefix_policy[pre].diffusion_behavior(p_a_pre, t, s).detach()
+                    epi_pre.append(epi_pre_i)
+            if len(suffix_policy) <=0:
+                pass
+            else:
+                for suf in range(len(suffix_policy)):
+                    epi_suf_i = suffix_policy[suf].diffusion_behavior(p_a_suf, t, s).detach()
+                    epi_suf.append(epi_suf_i)
             
 
             if "noise" in self.args.WT:
@@ -166,11 +183,13 @@ class SRPO_CTDE(nn.Module):
         # here we need to consider prefix agents' new policy and actions a'
         detach_a = a.detach().requires_grad_(True)
         """ others' a = xxx, a_joint = detach_a + others' a"""
-        a_pre = torch.tensor(a_pre)
-        a_suf = torch.tensor(a_suf)
-        detach_a_joint = torch.cat((a_pre, detach_a, a_suf), dim=0)
+        # a_pre = torch.tensor(a_pre)
+        # a_suf = torch.tensor(a_suf)
 
-        qs = self.q[0].q0_target.both(detach_a_joint , s)  # Dilac policy action and Q(s, a)
+        a_joint = a_pre+[detach_a]+a_suf
+        detach_a_joint = torch.cat(a_joint, dim=1)
+
+        qs = self.q[0].q0_target.both(detach_a_joint, s)  # Dilac policy action and Q(s, a)
         q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0
         self.SRPO_policy.q = torch.mean(q)
 
@@ -184,8 +203,9 @@ class SRPO_CTDE(nn.Module):
 
         # 这里可以把其他diff的score给进来，但是因为detach了所以是个常数，不影响梯度
         # guidance只对当前的a保留梯度，
-        episilon_all = torch.cat((epi_pre, episilon, epi_suf), dim=0)
-        loss = (episilon_all * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+        epi_all = epi_pre + [episilon] + epi_suf
+        episilon_all = torch.cat(epi_all, dim=1)
+        loss = (episilon_all * detach_a_joint).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
 
         # max Q - epsilon = min epsilon - Q
         loss = loss.mean()
@@ -197,7 +217,10 @@ class SRPO_CTDE(nn.Module):
         [diff.diffusion_behavior.train() for diff in prefix_policy]
         [diff.diffusion_behavior.train() for diff in suffix_policy]
 
-        return loss, episilon_all, guidance
+        rtn_epi_all = torch.sum(episilon_all, dim=0)
+        rtn_guide = torch.sum(guidance, dim=0)
+
+        return loss, rtn_epi_all, rtn_guide
     
 
 
@@ -234,6 +257,42 @@ class SRPO_Behavior(nn.Module):
         self.diffusion_optimizer.zero_grad()
         loss.backward()  
         self.diffusion_optimizer.step()
+
+class MASRPO_Behavior(nn.Module):
+    def __init__(self, input_dim, output_dim, marginal_prob_std, args=None):
+        super().__init__()
+        self.diffusion_behavior = ScoreNet_IDQL(input_dim, output_dim, marginal_prob_std, embed_dim=64, args=args)
+        self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=3e-4)
+
+        self.marginal_prob_std = marginal_prob_std
+        self.args = args
+        self.output_dim = output_dim
+        self.step = 0
+        self.device = args.device
+    
+    def update_behavior(self, data):
+        self.step += 1
+        all_a = data['action'].to(self.device)
+        all_s = data['obs'].to(self.device)
+        # Mujuco use obs instead of state
+
+        # Update diffusion behavior
+        self.diffusion_behavior.train()
+
+
+        random_t = torch.rand(all_a.shape[0], device=all_a.device) * (1. - 1e-3) + 1e-3  
+        z = torch.randn_like(all_a)
+        alpha_t, std = self.marginal_prob_std(random_t)
+        perturbed_x = all_a * alpha_t[:, None] + z * std[:, None]
+        episilon = self.diffusion_behavior(perturbed_x, random_t, all_s)
+        loss = torch.mean(torch.sum((episilon - z)**2, dim=(1,)))
+        self.loss = loss
+
+        self.diffusion_optimizer.zero_grad()
+        loss.backward()  
+        self.diffusion_optimizer.step()
+
+        return loss
         
 
 # used in train_critic.py   

@@ -49,7 +49,7 @@ diffmarl/
             - load samples
             - update with samples
 
-    - __main_
+    - main()
         - args = parser
         - offline_train(args)
 
@@ -113,10 +113,6 @@ diffmarl/
 - utils
 - results
 - envs
-
-
-
-
 
 
 ## Requirements

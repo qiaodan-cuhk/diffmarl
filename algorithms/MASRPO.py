@@ -31,8 +31,9 @@ def log_and_print(key, value, t, multi=False):
         print("t:", t, end=" | ")
         for i in range(len(key)):
             end = " | " if i < len(key) - 1 else "\n"
-            print("{}: {:.3f}".format(key[i], value[i][0]), end=end)
-            log_value(key[i], value[i][0], t)    
+            # print("{}: {:.3f}".format(key[i], value[i][0]), end=end)
+            print("{}: {}".format(key[i], value[i]), end=end)
+            log_value(key[i], value[i], t)    
     else:
         print("t:{}, {}: {:.3f}".format(t, key, value))
         log_value(key, value, t)
@@ -178,8 +179,8 @@ class IND_SRPO(object):
         if t % self.logging_interval == 0 and not self.no_log:
             dic = {}
             dic.update({"SRPO loss"+str(agent_i): loss_tot})
-            dic.update({"diffusion loss"+str(agent_i): epsilon})
-            dic.update({"Q gradient"+str(agent_i): guidance})
+            # dic.update({"diffusion loss"+str(agent_i): epsilon})
+            # dic.update({"Q gradient"+str(agent_i): guidance})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
 
@@ -366,7 +367,7 @@ class JAL_SRPO(object):
         marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
 
         self.agents = [SRPO(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config)]
-        self.agents.q[0].to(self.device)
+        self.agents[0].q[0].to(self.device)
 
 
         if self.env_id in ['simple_tag', 'simple_world']:
@@ -471,8 +472,8 @@ class JAL_SRPO(object):
         if t % self.logging_interval == 0 and not self.no_log:
             dic = {}
             dic.update({"SRPO loss of JAL": loss_tot})
-            dic.update({"diffusion loss of JAL": epsilon})
-            dic.update({"Q gradient of JAL": guidance})
+            # dic.update({"diffusion loss of JAL": epsilon})
+            # dic.update({"Q gradient of JAL": guidance})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
 
@@ -645,6 +646,7 @@ class SEQ_SRPO(object):
 
         self.nagents = len(alg_types)
         self.alg_types = alg_types
+        
         self.tau = tau
   
         self.agent_init_params = agent_init_params
@@ -664,10 +666,11 @@ class SEQ_SRPO(object):
 
         marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
 
+        config.alg_types = alg_types # used for SRPO_CTDE
+
         self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config) for agent in alg_types]
         for age in self.agents:
             age.q[0].to(self.device)
-
 
         if self.env_id in ['simple_tag', 'simple_world']:
             self.num_predators = len(agent_init_params)
@@ -731,15 +734,22 @@ class SEQ_SRPO(object):
             }
 
         prefix_policy = []
-        for pre in range(agent_i):
-            # check the first agent non-zero
-            # updated prefix agents
-            prefix_policy.append(self.agents[pre].SRPO_policy)
+
+        if agent_i <= 0:
+            pass
+        else:
+            for pre in range(agent_i):
+                # check the first agent non-zero
+                # updated prefix agents
+                prefix_policy.append(self.agents[pre])
 
         suffix_policy = []
-        for suf in range(agent_i+1, self.nagents+1):
-            # updated prefix agents
-            suffix_policy.append(self.agents[suf].SRPO_policy)
+        if agent_i >= self.nagents:
+            pass
+        else:
+            for suf in range(agent_i+1, self.nagents):
+                # updated prefix agents
+                suffix_policy.append(self.agents[suf])
 
         # Use Joint Q/A and individual score to update
         loss_tot, epsilon, guidance = curr_agent.update_SRPO_policy(sample_bridge, prefix_policy, suffix_policy)
@@ -747,11 +757,12 @@ class SEQ_SRPO(object):
         """ logging metric """
         if t % self.logging_interval == 0 and not self.no_log:
             dic = {}
-            dic.update({"SRPO loss"+str(agent_i): loss_tot})
-            dic.update({"diffusion loss"+str(agent_i): epsilon})
-            dic.update({"Q gradient"+str(agent_i): guidance})
+            dic.update({"SEQ_SRPO loss"+str(agent_i): loss_tot.item()})
+            # dic.update({"diffusion loss"+str(agent_i): epsilon})
+            # dic.update({"Q gradient"+str(agent_i): guidance})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
 
     # prepare train() or eval() 
     def prep_training(self, device='cpu'):

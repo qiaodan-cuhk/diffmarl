@@ -42,8 +42,8 @@ def make_parallel_env(env_id, seed, discrete_action):
 
     return DummyVecEnv([get_env_fn(0)])
 
-# evaluate policy in eval module with envs(seed+100)
-def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device, env_args=None):
+# evaluate policy in eval module with envs(seed+100) on cpu
+def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
     if env_name in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
@@ -58,11 +58,14 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device, e
 
             while not done:
                 obs = env.get_obs()
-                torch_obs = [Variable(torch.Tensor(obs[i]).unsqueeze(0), requires_grad=False) for i in range(agent.nagents)] 
+                # torch_obs = [Variable(torch.Tensor(obs[i]).unsqueeze(0), requires_grad=False) for i in range(agent.nagents)] 
+                torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(device)  for i in range(agent.nagents)] 
+
                 torch_agent_actions = agent.step(torch_obs, explore=False)
-                if torch.is_tensor(torch_agent_actions):
+                # if torch.is_tensor(torch_agent_actions):
+                if all(isinstance(item, torch.Tensor) for item in torch_agent_actions):
                     agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
-                elif isinstance(torch_agent_actions, np.ndarray):
+                elif all(isinstance(item, np.ndarray) for item in torch_agent_actions):
                     agent_actions = torch_agent_actions
 
                 actions = [ac.squeeze(0) for ac in agent_actions]  # 变为 list[np, np, np]
@@ -167,7 +170,7 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
 
 
 def offline_train(config):
-    unique_token = "{}__{}__seed{}".format(config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
+    unique_token = "{}__{}__{}__seed{}".format(config.env_id, config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
 
     unique_token = config.marltype+"_"+unique_token
     # JAL/IND/VD/SEQ _ time _ seed 
@@ -247,7 +250,7 @@ def offline_train(config):
                                             gamma=config.gamma, tau=config.tau, lr=config.lr,
                                             hidden_dim = config.hidden_dim, denoise_steps = config.T,
                                             batch_size=config.batch_size, device = config.device, config=config, **kwargs)
-            print("Sequential update SRPO agents haven't been established")
+            print("Sequential update SRPO agents have been established")
     else:
         print("Neither SRPO nor Diffusion-QL have been selected. Choose valid diffusion model")
             
@@ -255,17 +258,19 @@ def offline_train(config):
     if config.critic_load_path is not None:
         load_SRPO_critic(srpo_model=ma_agent, load_path=config.critic_load_path, srpo_type=config.marltype)
     else:
-        assert False
+        print('Critic models are not loaded to SRPO')
 
     if config.diffusion_load_path is not None:
         load_SRPO_diffusion(srpo_model=ma_agent, load_path=config.actor_load_path, srpo_type=config.marltype)
     else:
-        assert False
+        print('Diffusion models are not loaded to SRPO')
 
     # load pretrained preys model to DDPG
     if config.env_id in ['simple_tag', 'simple_world']:
         pretrained_model_dir = './datasets/{}/pretrained_adv_model.pt'.format(config.env_id)
         ma_agent.load_pretrained_preys(pretrained_model_dir)
+    else:
+        print('Prey DDPG are not loaded')
 
     # load full offline datasets to buffer
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
@@ -314,8 +319,9 @@ def offline_train(config):
     for t in range(config.num_steps + 1):
         # set as eval() when eval
         if t % config.eval_interval == 0 or t == config.num_steps:
+            # eval_policy will set rollouts at start
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
-            eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, config.device, env_args=env_args)
+            eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t)
@@ -365,21 +371,21 @@ if __name__ == '__main__':
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
-    parser.add_argument("--marltype", default='CTDE') # JAL, IND, VD, SEQ
+    parser.add_argument("--marltype", default='JAL') # JAL, IND, VD, CTDE
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
     parser.add_argument("--beta_schedule", default='vp', type=str)
-    parser.add_argument("--seed", default=0, type=int, help="Random seed")
+    parser.add_argument("--seed", default=10, type=int, help="Random seed")
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     parser.add_argument("--device", default=0, type=int, help='cuda number')
 
     """   Unchangeable Params   """
     # log and save dir
-    parser.add_argument("--dir", type=str, default='results', help="Name of directory to store model/training contents")
+    parser.add_argument("--dir", type=str, default='results', help="tensorboard log directory")
     parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
 
-    # params for envs
+    # params for MPE envs
     parser.add_argument("--discrete_action", action='store_true', default=False)
     
     # params for buffer and data
@@ -388,6 +394,7 @@ if __name__ == '__main__':
     parser.add_argument("--steps_per_update", default=100, type=int)
     parser.add_argument("--batch_size", default=256, type=int, help="Batch size for model training")
     parser.add_argument("--hidden_dim", default=64, type=int)
+    # set_lr is unuseful
     parser.add_argument("--set_lr", action='store_true')
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--rew_scale", default=1.0, type=float)
@@ -399,29 +406,42 @@ if __name__ == '__main__':
     # params for evaluation
     parser.add_argument('--eval_episodes', default=10, type=int)
     parser.add_argument('--eval_interval', default=10000, type=int)
-    parser.add_argument('--num_steps', default=int(1e7), type=int)
+
+    # training steps
+    parser.add_argument('--num_steps', default=int(1e6), type=int)
 
     # params for logging
     parser.add_argument("--logging_interval", default=500, type=int)
     parser.add_argument("--no_log", action='store_true')
 
     ######### args for SRPO To be revise #########
-    
-    
-    parser.add_argument("--save_model", default=1, type=int)       
-    # parser.add_argument('--debug', type=int, default=0)
-    parser.add_argument('--beta', type=float, default=None)       
+
+
+    # save critic and diffusion behavior models in pretraining
+    parser.add_argument("--save_model", default=1, type=int)
+    # regularization para
+    parser.add_argument('--beta', type=float, default=None)  
+    # critic and diffusion models load path     
     parser.add_argument('--actor_load_path', type=str, default=None)
     parser.add_argument('--critic_load_path', type=str, default=None)
     parser.add_argument('--diffusion_load_path', type=str, default=None)
-    # parser.add_argument('--policy_batchsize', type=int, default=256)              
-    parser.add_argument('--actor_blocks', type=int, default=3)     
+    # batch size data for training
+    # parser.add_argument('--policy_batchsize', type=int, default=256)   
+    # the block numbers of MLP in ScoreNet IDQL        
+    parser.add_argument('--actor_blocks', type=int, default=3) 
+    # didn't find z noise    
     # parser.add_argument('--z_noise', type=int, default=1)
     parser.add_argument('--WT', type=str, default="VDS")
+    # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
+
+    # self.SRPO_policy_lr_scheduler, cosineAnnealingLR
     parser.add_argument('--n_policy_epochs', type=int, default=100)
+    # Dilac Policy layers = 2
     parser.add_argument('--policy_layer', type=int, default=None)
-    parser.add_argument('--critic_load_epochs', type=int, default=150)
+    # not find
+    # parser.add_argument('--critic_load_epochs', type=int, default=150)
+    # regularized q gradients
     parser.add_argument('--regq', type=int, default=0)
     ##################################################
 
@@ -448,21 +468,21 @@ if __name__ == '__main__':
         config.num_steps = 25000
         if config.env_id == 'simple_world':
             config.steps_per_update=20
-
-    else:
-        config.num_steps = int(1e6)
-        config.steps_per_update = 10
+    else:  # MaMujoco
+        config.num_steps = int(1e5)
+        config.steps_per_update = 10 # 也没用
         config.eval_interval = 5000
         config.logging_interval = 5000
-        config.episode_length=1000
+        config.episode_length = 1000
         config.gamma=0.99
-        config.lr = 0.0003
+        config.lr = 0.0003  # 并没有进入 SRPO，只在DDPG上
            
         config.tau = 0.005
         config.gamma = 0.99
 
     if config.marltype == 'JAL':
         config.T=20
+        # control Diffusion-QL, dont control SRPO
         
     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
         
