@@ -8,7 +8,7 @@ results/
 datasets/
 logs_SRPO_diffusion_pretrain/
 logs_SRPO_critic_pretrain/
-SRPO_premodels/
+SRPO_premodels
 .idea/
 
 
