@@ -8,11 +8,12 @@ from utils.noise import action_noise
 
 import copy
 import torch.nn as nn
-from .SRPO import SRPO, SRPO_CTDE
+from .SRPO import SRPO, SRPO_CTDE, SRPO_CTDE_others, SRPO_SEQ
 
 from tensorboard_logger import log_value
 
 import functools
+
 
 # SRPO marginal_prob_std\\\
 def marginal_prob_std(t, device="cuda",beta_1=20.0,beta_0=0.1):
@@ -39,15 +40,9 @@ def log_and_print(key, value, t, multi=False):
         log_value(key, value, t)
 
 
-"""
-Joint action learning: central critic, joint policy diffusion
-Independent learning: independent critic, indpendent policy diffusion
-QMIX learning: central critic -> VD ind critic, ind policy diffusion
-Seq: central critic, joint policy diffusion, partial diffusion to regularize ind policy
-"""
 
-# MARL SRPO Algos
-class IND_SRPO(object):
+# MARL SRPO Base Independent Learning
+class BASE_SRPO(object):
     def __init__(
         self, 
         agent_init_params, # state & action dim
@@ -108,19 +103,6 @@ class IND_SRPO(object):
 
         self.niter = 0
   
-
-    # @property
-    # def policies(self):
-    #     return [a.actor for a in self.agents]
-    # # self.policy = Diffusion()
-    # # action = self.policy.forward(obs)
-
-    # @property
-    # def target_policies(self):
-    #     return [a.ema_model for a in self.agents]
-    # # self.ema_model = copy.deepcopy(self.actor)
-    # # 但是这个并不用作 target policy，没有 soft update，soft只作用于 diffusion critic
-
 
     def step(self, observations, explore=False):
         """
@@ -317,6 +299,47 @@ class IND_SRPO(object):
     
 
 
+# MARL SRPO Independent Learning
+class IND_SRPO(BASE_SRPO):
+    def __init__(
+        self, 
+        agent_init_params, # state & action dim
+        agent_max_actions, 
+        alg_types, 
+        denoise_steps=20,
+        device = 'cpu',
+        adv_init_params=None,
+        gamma=0.99, # RL discount gamma
+        tau=0.01,  # 这个 tau 是用来 target network soft update的
+        lr=0.01, 
+        hidden_dim=64, 
+        discrete_action=False, 
+        env_id=None,
+        batch_size = 100,
+        config = None,
+        **kwargs
+    ):
+        super().__init__(agent_init_params, # state & action dim
+        agent_max_actions, 
+        alg_types, 
+        denoise_steps=denoise_steps,
+        device = device,
+        adv_init_params=adv_init_params,
+        gamma=gamma, # RL discount gamma
+        tau=tau,  # 这个 tau 是用来 target network soft update的
+        lr=lr, 
+        hidden_dim=hidden_dim, 
+        discrete_action=discrete_action, 
+        env_id=env_id,
+        batch_size = batch_size,
+        config = config,
+        **kwargs)
+        self.class_mode = 'Independent MASRRPO'
+
+
+
+
+# MARL SRPO Joint Action Learning
 class JAL_SRPO(object):
     def __init__(
         self, 
@@ -377,20 +400,6 @@ class JAL_SRPO(object):
             self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
 
         self.niter = 0
-  
-
-    # @property
-    # def policies(self):
-    #     return [a.actor for a in self.agents]
-    # # self.policy = Diffusion()
-    # # action = self.policy.forward(obs)
-
-    # @property
-    # def target_policies(self):
-    #     return [a.ema_model for a in self.agents]
-    # # self.ema_model = copy.deepcopy(self.actor)
-    # # 但是这个并不用作 target policy，没有 soft update，soft只作用于 diffusion critic
-
 
     def step(self, observations, explore=False):
         """
@@ -421,9 +430,11 @@ class JAL_SRPO(object):
         else:
             observations = torch.cat(observations, dim=1)
             joint_actions = self.agents[0].SRPO_policy.select_actions(observations)
-            actions = np.split(joint_actions, self.nagents, axis=0)
+            # joint_actions = joint_actions.squeeze(0)
+            # actions = np.split(joint_actions, self.nagents, axis=0)
+            actions = np.split(joint_actions, self.nagents, axis=1)
 
-        assert len(actions[0]) == self.agent_init_params[0]['action_dim']
+        assert actions[0].shape[-1] == self.agent_init_params[0]['action_dim']
 
         return actions
 
@@ -608,6 +619,838 @@ class JAL_SRPO(object):
             p.policy.eval()
             p.target_policy.eval()
 
+
+
+"""
+Joint action learning: central critic, joint policy diffusion
+Independent learning: independent critic, indpendent policy diffusion
+QMIX learning: central critic -> VD ind critic, ind policy diffusion
+Seq: central critic, joint policy diffusion, partial diffusion to regularize ind policy
+"""
+
+        
+
+    
+
+# MARL SRPO Joint Action Learning
+class JAL_SRPO(object):
+    def __init__(
+        self, 
+        agent_init_params, # state & action dim
+        agent_max_actions, 
+        alg_types, 
+        denoise_steps=20,
+        device = 'cpu',
+        adv_init_params=None,
+        gamma=0.99, # RL discount gamma
+        tau=0.01,  # 这个 tau 是用来 target network soft update的
+        lr=0.01, 
+        hidden_dim=64, 
+        discrete_action=False, 
+        env_id=None,
+        batch_size = 100,
+        config = None,
+        **kwargs
+    ):
+        self.env_id = env_id
+        self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+
+        assert (ma == agent_max_actions[0] for ma in agent_max_actions)
+        self.max_action = agent_max_actions[0]
+        self.min_action = -self.max_action
+        self.hidden_dim = hidden_dim  # 64 for DDPG
+
+        self.nagents = len(alg_types)
+        self.alg_types = alg_types
+        self.tau = tau
+  
+        self.agent_init_params = agent_init_params
+        # in JAL, the state and action dim are multiplex by agent numbers
+        self.state_dim = self.agent_init_params[0]['state_dim'] * self.nagents  # use concate obs as input
+        self.action_dim = self.agent_init_params[0]['action_dim'] * self.nagents
+        self.device = device
+        
+        self.gamma = gamma
+        self.lr = lr
+        self.discrete_action = discrete_action
+
+        self.T = denoise_steps
+        self.batch_size = batch_size
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+        self.agents = [SRPO(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config)]
+        self.agents[0].q[0].to(self.device)
+
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            self.num_predators = len(agent_init_params)
+            self.num_preys = len(adv_init_params)
+
+            self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+
+        self.niter = 0
+
+    def step(self, observations, explore=False):
+        """
+        Take a step forward in environment with all agents
+        Inputs:
+            observations: List of observations for each agent
+            explore (boolean): Whether or not to add exploration noise
+        Outputs:
+            actions: List of actions for each agent
+        """
+
+        # input torch_obs is [torch(1,18), torch(1,18), torch(1,18)]
+        # output actions is [array(2), array(2), array(2)]
+        # for JAL, one diff model generate all agents actions
+
+        if self.env_id in ['simple_world', 'simple_tag']:
+            obs_predator = observations[:self.num_predators]
+            obs_predator = torch.cat(obs_predator, dim=1)
+            obs_prey = observations[self.num_predators:]
+            
+            self.agents[i].SRPO_policy.select_actions(obs)
+            predator_actions = self.agents[0].SRPO_policy.select_actions(obs_predator) # input tensor[1,obs_dim * n] output array[1, act_dim * n]
+            actions = np.split(predator_actions, self.num_predators, axis=0)
+
+            for i, obs in zip(obs_prey):
+                prey_action = self.preys[i].step(obs, explore=False)
+                actions.append(prey_action)
+        else:
+            observations = torch.cat(observations, dim=1)
+            joint_actions = self.agents[0].SRPO_policy.select_actions(observations)
+            # joint_actions = joint_actions.squeeze(0)
+            # actions = np.split(joint_actions, self.nagents, axis=0)
+            actions = np.split(joint_actions, self.nagents, axis=1)
+
+        assert actions[0].shape[-1] == self.agent_init_params[0]['action_dim']
+
+        return actions
+
+        # actions = [array([0.99983406, 0...e=float32), array([0.9950481 , 0...e=float32), array([ 0.44896033, ...e=float32)]
+        # observations = [tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]])]
+        # obs = tensor([1, 18])
+    
+
+    def update(self, sample, t):
+        
+        JAL_agent = self.agents[0]
+
+        jal_obs = [sample_i['obs'] for sample_i in sample]
+        jal_obs = torch.cat(jal_obs, dim=1)
+        assert jal_obs.size()[0] == self.batch_size
+
+        jal_act = [sample_i['action'] for sample_i in sample]  # nagents * batch_size * act_dim
+        jal_act = torch.cat(jal_act, dim=1) # batch_size * (nagents*act_dim)
+
+        jal_rew = sample[0]['rewards']  # [batch_size]
+        jal_done = sample[0]['done'] # [batch_size]
+
+        jal_next_obs = [sample_i['next_obs'] for sample_i in sample]
+        jal_next_obs = torch.cat(jal_next_obs, dim=1)
+
+        # data reconstruction
+        # 参考OMAR，mamujoco提供了state，但是训练用的还是obs
+        if self.is_mamujoco:
+            sample_bridge = {"s": jal_obs,
+                             "a": jal_act,
+                             "r": jal_rew,
+                             "s_": jal_next_obs,
+                             "d": jal_done
+            }
+        else:
+            sample_bridge = {"s": jal_obs,
+                             "a": jal_act,
+                             "r": jal_rew,
+                             "s_": jal_next_obs,
+                             "d": jal_done
+            }
+
+        loss_tot, epsilon, guidance = JAL_agent.update_SRPO_policy(sample_bridge)
+        
+        """ logging metric """
+        if t % self.logging_interval == 0 and not self.no_log:
+            dic = {}
+            dic.update({"SRPO loss of JAL": loss_tot})
+            # dic.update({"diffusion loss of JAL": epsilon})
+            # dic.update({"Q gradient of JAL": guidance})
+            
+            log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
+    # prepare train() or eval() 
+    def prep_training(self, device='cpu'):
+
+        for a in self.agents:
+            a.diffusion_behavior.train()
+            a.SRPO_policy.train()
+            a.q[0].train()
+
+        fn = lambda x: x.to(device)   
+        for a in self.agents:
+            a.diffusion_behavior = fn(a.diffusion_behavior)
+            a.SRPO_policy = fn(a.SRPO_policy)
+            a.q[0] = fn(a.q[0])
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            for p in self.preys:
+                p.policy = fn(p.policy)
+                p.target_policy = fn(p.target_policy)
+
+    def prep_rollouts(self, device='cpu'):
+        for a in self.agents:
+            a.diffusion_behavior.eval()
+            a.SRPO_policy.eval()
+            a.q[0].eval()
+
+        fn = lambda x: x.to(device)
+
+        for a in self.agents:
+            a.diffusion_behavior = fn(a.diffusion_behavior)
+            a.SRPO_policy = fn(a.SRPO_policy)
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            for p in self.preys:
+                p.policy = fn(p.policy)
+
+
+    @classmethod
+    def init_from_env(cls, env, env_id, env_info=None, agent_alg="diffusion", adversary_alg="ddpg",
+                       gamma=0.95, tau=0.01, lr=0.01, hidden_dim=64,
+                       batch_size=None, denoise_steps=20, config=None, **kwargs):
+        """
+        Instantiate instance of this class from multi-agent environment
+        """
+
+        # create n trainable agents without prey, alg_types = ['diff', 'diff', 'diff']
+        if env_id in ['simple_tag', 'simple_world']:
+            alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
+        elif env_id in ['simple_spread']:
+            alg_types = [agent_alg for atype in env.agent_types]
+        elif env_id in ['HalfCheetah-v2']:
+            alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+
+        agent_init_params = []
+        all_n_actions = []
+        agent_max_actions = []
+        adv_init_params = []
+
+        # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
+        if env_id == 'HalfCheetah-v2':
+            for agent_idx in range(len(alg_types)):
+                acsp = env_info['action_spaces'][agent_idx]
+                num_in_pol = env_info['obs_shape']
+                num_out_pol = acsp.shape[0]
+
+                agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                
+                agent_max_actions.append(acsp.high[0])
+                all_n_actions.append(acsp.shape[0])
+        else:
+            for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
+                num_in_pol = obsp.shape[0]
+                num_out_pol = acsp.shape[0]
+                num_in_critic = num_in_pol + num_out_pol
+
+                if env_id in ['simple_spread']:
+                    agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                    agent_max_actions.append(acsp.high[0])
+                else:
+                    if agent_type == 'adversary':  # adversary 是猎人，agent 是猎物
+                        agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                        agent_max_actions.append(acsp.high[0])
+                    elif agent_type == 'agent':
+                        adv_init_params.append({'num_in_pol': num_in_pol, 'num_out_pol': num_out_pol, 'num_in_critic': num_in_critic})
+
+                all_n_actions.append(acsp.shape[0])
+
+            for i in range(1, len(all_n_actions)):
+                assert (all_n_actions[i] == all_n_actions[0])  # 同时包括了 predator 和 prey 的动作维度
+
+
+        init_dict = {
+            'agent_init_params': agent_init_params,
+            'agent_max_actions': agent_max_actions,
+            'alg_types': alg_types,
+            'denoise_steps': denoise_steps,
+            'device': 'cpu',
+            'adv_init_params': adv_init_params,
+            'gamma': gamma, 
+            'tau': tau,
+            'lr': lr,
+            'hidden_dim': hidden_dim,
+            'discrete_action': False,
+            'env_id': env_id,
+            'batch_size': batch_size,   
+            'config': config,
+        }
+
+        # if have additional params in kwargs
+        init_dict.update(kwargs)
+        instance = cls(**init_dict)
+        instance.init_dict = init_dict
+        
+        return instance
+
+
+    
+
+
+
+
+# # MARL SRPO Independent Learning
+# class IND_SRPO(object):
+#     def __init__(
+#         self, 
+#         agent_init_params, # state & action dim
+#         agent_max_actions, 
+#         alg_types, 
+#         denoise_steps=20,
+#         device = 'cpu',
+#         adv_init_params=None,
+#         gamma=0.99, # RL discount gamma
+#         tau=0.01,  # 这个 tau 是用来 target network soft update的
+#         lr=0.01, 
+#         hidden_dim=64, 
+#         discrete_action=False, 
+#         env_id=None,
+#         batch_size = 100,
+#         config = None,
+#         **kwargs
+#     ):
+#         self.env_id = env_id
+#         self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+
+#         assert (ma == agent_max_actions[0] for ma in agent_max_actions)
+#         self.max_action = agent_max_actions[0]
+#         self.min_action = -self.max_action
+#         self.hidden_dim = hidden_dim  # 64 for DDPG
+
+#         self.nagents = len(alg_types)
+#         self.alg_types = alg_types
+#         self.tau = tau
+  
+#         self.agent_init_params = agent_init_params
+#         self.state_dim = self.agent_init_params[0]['state_dim']
+#         self.action_dim = self.agent_init_params[0]['action_dim']
+#         self.device = device
+        
+#         self.gamma = gamma
+#         self.lr = lr
+#         self.discrete_action = discrete_action
+
+#         self.T = denoise_steps
+#         self.batch_size = batch_size
+
+#         for k, v in kwargs.items():
+#             setattr(self, k, v)
+
+#         marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+#         self.agents = [SRPO(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config) for agent in alg_types]
+#         for age in self.agents:
+#             age.q[0].to(self.device)
+
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             self.num_predators = len(agent_init_params)
+#             self.num_preys = len(adv_init_params)
+
+#             self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+
+#         self.niter = 0
+  
+
+#     # @property
+#     # def policies(self):
+#     #     return [a.actor for a in self.agents]
+#     # # self.policy = Diffusion()
+#     # # action = self.policy.forward(obs)
+
+#     # @property
+#     # def target_policies(self):
+#     #     return [a.ema_model for a in self.agents]
+#     # # self.ema_model = copy.deepcopy(self.actor)
+#     # # 但是这个并不用作 target policy，没有 soft update，soft只作用于 diffusion critic
+
+
+#     def step(self, observations, explore=False):
+#         """
+#         Take a step forward in environment with all agents
+#         Inputs:
+#             observations: List of observations for each agent
+#             explore (boolean): Whether or not to add exploration noise
+#         Outputs:
+#             actions: List of actions for each agent
+#         """
+#         actions = []
+
+#         # nagents = agents + prey (if have)
+#         for i, obs in zip(range(self.nagents), observations):   
+#             if self.env_id in ['simple_world', 'simple_tag']:
+#                 if i < self.num_predators:
+#                     predator_action = self.agents[i].SRPO_policy.select_actions(obs)  # SRPO use Dilac sample action
+#                     actions.append(predator_action)
+#                 else:
+#                     prey_action = self.preys[i - self.num_predators].step(obs, explore=False)
+#                     actions.append(prey_action)
+#             else:
+#                 action = self.agents[i].SRPO_policy.select_actions(obs)
+#                 actions.append(action)
+#         return actions
+
+#         # actions = [array([0.99983406, 0...e=float32), array([0.9950481 , 0...e=float32), array([ 0.44896033, ...e=float32)]
+#         # observations = [tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]])]
+#         # obs = tensor([1, 18])
+    
+
+#     def update(self, sample, agent_i, t):
+
+#         curr_agent = self.agents[agent_i]
+
+#         # data reconstruction
+#         # 参考OMAR，mamujoco提供了state，但是训练用的还是obs
+#         if self.is_mamujoco:
+#             sample_bridge = {"s": sample["obs"],
+#                              "a": sample["action"],
+#                              "r": sample["rewards"],
+#                              "s_": sample["next_obs"],
+#                              "d": sample["done"]
+#             }
+#         else:
+#             sample_bridge = {"s": sample["obs"],
+#                              "a": sample["action"],
+#                              "r": sample["rewards"],
+#                              "s_": sample["next_obs"],
+#                              "d": sample["done"]
+#             }
+
+#         loss_tot, epsilon, guidance = curr_agent.update_SRPO_policy(sample_bridge)
+        
+#         """ logging metric """
+#         if t % self.logging_interval == 0 and not self.no_log:
+#             dic = {}
+#             dic.update({"SRPO loss"+str(agent_i): loss_tot})
+#             # dic.update({"diffusion loss"+str(agent_i): epsilon})
+#             # dic.update({"Q gradient"+str(agent_i): guidance})
+            
+#             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
+#     # prepare train() or eval() 
+#     def prep_training(self, device='cpu'):
+
+#         for a in self.agents:
+#             a.diffusion_behavior.train()
+#             a.SRPO_policy.train()
+#             a.q[0].train()
+
+#         fn = lambda x: x.to(device)   
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+#             a.q[0] = fn(a.q[0])
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+#                 p.target_policy = fn(p.target_policy)
+
+#     def prep_rollouts(self, device='cpu'):
+#         for a in self.agents:
+#             a.diffusion_behavior.eval()
+#             a.SRPO_policy.eval()
+#             a.q[0].eval()
+
+#         fn = lambda x: x.to(device)
+
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+
+
+#     @classmethod
+#     def init_from_env(cls, env, env_id, env_info=None, agent_alg="diffusion", adversary_alg="ddpg",
+#                        gamma=0.95, tau=0.01, lr=0.01, hidden_dim=64,
+#                        batch_size=None, denoise_steps=20, config=None, **kwargs):
+#         """
+#         Instantiate instance of this class from multi-agent environment
+#         """
+
+#         # create n trainable agents without prey, alg_types = ['diff', 'diff', 'diff']
+#         if env_id in ['simple_tag', 'simple_world']:
+#             alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
+#         elif env_id in ['simple_spread']:
+#             alg_types = [agent_alg for atype in env.agent_types]
+#         elif env_id in ['HalfCheetah-v2']:
+#             alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+
+#         agent_init_params = []
+#         all_n_actions = []
+#         agent_max_actions = []
+#         adv_init_params = []
+
+#         # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
+#         if env_id == 'HalfCheetah-v2':
+#             for agent_idx in range(len(alg_types)):
+#                 acsp = env_info['action_spaces'][agent_idx]
+#                 num_in_pol = env_info['obs_shape']
+#                 num_out_pol = acsp.shape[0]
+
+#                 agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                
+#                 agent_max_actions.append(acsp.high[0])
+#                 all_n_actions.append(acsp.shape[0])
+#         else:
+#             for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
+#                 num_in_pol = obsp.shape[0]
+#                 num_out_pol = acsp.shape[0]
+#                 num_in_critic = num_in_pol + num_out_pol
+
+#                 if env_id in ['simple_spread']:
+#                     agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                     agent_max_actions.append(acsp.high[0])
+#                 else:
+#                     if agent_type == 'adversary':  # adversary 是猎人，agent 是猎物
+#                         agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                         agent_max_actions.append(acsp.high[0])
+#                     elif agent_type == 'agent':
+#                         adv_init_params.append({'num_in_pol': num_in_pol, 'num_out_pol': num_out_pol, 'num_in_critic': num_in_critic})
+
+#                 all_n_actions.append(acsp.shape[0])
+
+#             for i in range(1, len(all_n_actions)):
+#                 assert (all_n_actions[i] == all_n_actions[0])  # 同时包括了 predator 和 prey 的动作维度
+
+
+#         init_dict = {
+#             'agent_init_params': agent_init_params,
+#             'agent_max_actions': agent_max_actions,
+#             'alg_types': alg_types,
+#             'denoise_steps': denoise_steps,
+#             'device': 'cpu',
+#             'adv_init_params': adv_init_params,
+#             'gamma': gamma, 
+#             'tau': tau,
+#             'lr': lr,
+#             'hidden_dim': hidden_dim,
+#             'discrete_action': False,
+#             'env_id': env_id,
+#             'batch_size': batch_size,   
+#             'config': config,
+#         }
+
+#         # if have additional params in kwargs
+#         init_dict.update(kwargs)
+#         instance = cls(**init_dict)
+#         instance.init_dict = init_dict
+        
+#         return instance
+
+
+#     def load_pretrained_preys(self, filename):
+#         if not torch.cuda.is_available():
+#             save_dict = torch.load(filename, map_location=torch.device('cpu'))
+#         else:
+#             save_dict = torch.load(filename)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             prey_params = save_dict['agent_params'][self.num_predators:]
+
+#         for i, params in zip(range(self.num_preys), prey_params):
+#             self.preys[i].load_params_without_optims(params)
+
+#         for p in self.preys:
+#             p.policy.eval()
+#             p.target_policy.eval()
+    
+
+# # MARL SRPO Joint Action Learning
+# class JAL_SRPO(object):
+#     def __init__(
+#         self, 
+#         agent_init_params, # state & action dim
+#         agent_max_actions, 
+#         alg_types, 
+#         denoise_steps=20,
+#         device = 'cpu',
+#         adv_init_params=None,
+#         gamma=0.99, # RL discount gamma
+#         tau=0.01,  # 这个 tau 是用来 target network soft update的
+#         lr=0.01, 
+#         hidden_dim=64, 
+#         discrete_action=False, 
+#         env_id=None,
+#         batch_size = 100,
+#         config = None,
+#         **kwargs
+#     ):
+#         self.env_id = env_id
+#         self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+
+#         assert (ma == agent_max_actions[0] for ma in agent_max_actions)
+#         self.max_action = agent_max_actions[0]
+#         self.min_action = -self.max_action
+#         self.hidden_dim = hidden_dim  # 64 for DDPG
+
+#         self.nagents = len(alg_types)
+#         self.alg_types = alg_types
+#         self.tau = tau
+  
+#         self.agent_init_params = agent_init_params
+#         # in JAL, the state and action dim are multiplex by agent numbers
+#         self.state_dim = self.agent_init_params[0]['state_dim'] * self.nagents  # use concate obs as input
+#         self.action_dim = self.agent_init_params[0]['action_dim'] * self.nagents
+#         self.device = device
+        
+#         self.gamma = gamma
+#         self.lr = lr
+#         self.discrete_action = discrete_action
+
+#         self.T = denoise_steps
+#         self.batch_size = batch_size
+
+#         for k, v in kwargs.items():
+#             setattr(self, k, v)
+
+#         marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+#         self.agents = [SRPO(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config)]
+#         self.agents[0].q[0].to(self.device)
+
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             self.num_predators = len(agent_init_params)
+#             self.num_preys = len(adv_init_params)
+
+#             self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+
+#         self.niter = 0
+
+#     def step(self, observations, explore=False):
+#         """
+#         Take a step forward in environment with all agents
+#         Inputs:
+#             observations: List of observations for each agent
+#             explore (boolean): Whether or not to add exploration noise
+#         Outputs:
+#             actions: List of actions for each agent
+#         """
+
+#         # input torch_obs is [torch(1,18), torch(1,18), torch(1,18)]
+#         # output actions is [array(2), array(2), array(2)]
+#         # for JAL, one diff model generate all agents actions
+
+#         if self.env_id in ['simple_world', 'simple_tag']:
+#             obs_predator = observations[:self.num_predators]
+#             obs_predator = torch.cat(obs_predator, dim=1)
+#             obs_prey = observations[self.num_predators:]
+            
+#             self.agents[i].SRPO_policy.select_actions(obs)
+#             predator_actions = self.agents[0].SRPO_policy.select_actions(obs_predator) # input tensor[1,obs_dim * n] output array[1, act_dim * n]
+#             actions = np.split(predator_actions, self.num_predators, axis=0)
+
+#             for i, obs in zip(obs_prey):
+#                 prey_action = self.preys[i].step(obs, explore=False)
+#                 actions.append(prey_action)
+#         else:
+#             observations = torch.cat(observations, dim=1)
+#             joint_actions = self.agents[0].SRPO_policy.select_actions(observations)
+#             # joint_actions = joint_actions.squeeze(0)
+#             # actions = np.split(joint_actions, self.nagents, axis=0)
+#             actions = np.split(joint_actions, self.nagents, axis=1)
+
+#         assert actions[0].shape[-1] == self.agent_init_params[0]['action_dim']
+
+#         return actions
+
+#         # actions = [array([0.99983406, 0...e=float32), array([0.9950481 , 0...e=float32), array([ 0.44896033, ...e=float32)]
+#         # observations = [tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]])]
+#         # obs = tensor([1, 18])
+    
+
+#     def update(self, sample, t):
+        
+#         JAL_agent = self.agents[0]
+
+#         jal_obs = [sample_i['obs'] for sample_i in sample]
+#         jal_obs = torch.cat(jal_obs, dim=1)
+#         assert jal_obs.size()[0] == self.batch_size
+
+#         jal_act = [sample_i['action'] for sample_i in sample]  # nagents * batch_size * act_dim
+#         jal_act = torch.cat(jal_act, dim=1) # batch_size * (nagents*act_dim)
+
+#         jal_rew = sample[0]['rewards']  # [batch_size]
+#         jal_done = sample[0]['done'] # [batch_size]
+
+#         jal_next_obs = [sample_i['next_obs'] for sample_i in sample]
+#         jal_next_obs = torch.cat(jal_next_obs, dim=1)
+
+#         # data reconstruction
+#         # 参考OMAR，mamujoco提供了state，但是训练用的还是obs
+#         if self.is_mamujoco:
+#             sample_bridge = {"s": jal_obs,
+#                              "a": jal_act,
+#                              "r": jal_rew,
+#                              "s_": jal_next_obs,
+#                              "d": jal_done
+#             }
+#         else:
+#             sample_bridge = {"s": jal_obs,
+#                              "a": jal_act,
+#                              "r": jal_rew,
+#                              "s_": jal_next_obs,
+#                              "d": jal_done
+#             }
+
+#         loss_tot, epsilon, guidance = JAL_agent.update_SRPO_policy(sample_bridge)
+        
+#         """ logging metric """
+#         if t % self.logging_interval == 0 and not self.no_log:
+#             dic = {}
+#             dic.update({"SRPO loss of JAL": loss_tot})
+#             # dic.update({"diffusion loss of JAL": epsilon})
+#             # dic.update({"Q gradient of JAL": guidance})
+            
+#             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
+#     # prepare train() or eval() 
+#     def prep_training(self, device='cpu'):
+
+#         for a in self.agents:
+#             a.diffusion_behavior.train()
+#             a.SRPO_policy.train()
+#             a.q[0].train()
+
+#         fn = lambda x: x.to(device)   
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+#             a.q[0] = fn(a.q[0])
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+#                 p.target_policy = fn(p.target_policy)
+
+#     def prep_rollouts(self, device='cpu'):
+#         for a in self.agents:
+#             a.diffusion_behavior.eval()
+#             a.SRPO_policy.eval()
+#             a.q[0].eval()
+
+#         fn = lambda x: x.to(device)
+
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+
+
+#     @classmethod
+#     def init_from_env(cls, env, env_id, env_info=None, agent_alg="diffusion", adversary_alg="ddpg",
+#                        gamma=0.95, tau=0.01, lr=0.01, hidden_dim=64,
+#                        batch_size=None, denoise_steps=20, config=None, **kwargs):
+#         """
+#         Instantiate instance of this class from multi-agent environment
+#         """
+
+#         # create n trainable agents without prey, alg_types = ['diff', 'diff', 'diff']
+#         if env_id in ['simple_tag', 'simple_world']:
+#             alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
+#         elif env_id in ['simple_spread']:
+#             alg_types = [agent_alg for atype in env.agent_types]
+#         elif env_id in ['HalfCheetah-v2']:
+#             alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+
+#         agent_init_params = []
+#         all_n_actions = []
+#         agent_max_actions = []
+#         adv_init_params = []
+
+#         # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
+#         if env_id == 'HalfCheetah-v2':
+#             for agent_idx in range(len(alg_types)):
+#                 acsp = env_info['action_spaces'][agent_idx]
+#                 num_in_pol = env_info['obs_shape']
+#                 num_out_pol = acsp.shape[0]
+
+#                 agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                
+#                 agent_max_actions.append(acsp.high[0])
+#                 all_n_actions.append(acsp.shape[0])
+#         else:
+#             for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
+#                 num_in_pol = obsp.shape[0]
+#                 num_out_pol = acsp.shape[0]
+#                 num_in_critic = num_in_pol + num_out_pol
+
+#                 if env_id in ['simple_spread']:
+#                     agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                     agent_max_actions.append(acsp.high[0])
+#                 else:
+#                     if agent_type == 'adversary':  # adversary 是猎人，agent 是猎物
+#                         agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                         agent_max_actions.append(acsp.high[0])
+#                     elif agent_type == 'agent':
+#                         adv_init_params.append({'num_in_pol': num_in_pol, 'num_out_pol': num_out_pol, 'num_in_critic': num_in_critic})
+
+#                 all_n_actions.append(acsp.shape[0])
+
+#             for i in range(1, len(all_n_actions)):
+#                 assert (all_n_actions[i] == all_n_actions[0])  # 同时包括了 predator 和 prey 的动作维度
+
+
+#         init_dict = {
+#             'agent_init_params': agent_init_params,
+#             'agent_max_actions': agent_max_actions,
+#             'alg_types': alg_types,
+#             'denoise_steps': denoise_steps,
+#             'device': 'cpu',
+#             'adv_init_params': adv_init_params,
+#             'gamma': gamma, 
+#             'tau': tau,
+#             'lr': lr,
+#             'hidden_dim': hidden_dim,
+#             'discrete_action': False,
+#             'env_id': env_id,
+#             'batch_size': batch_size,   
+#             'config': config,
+#         }
+
+#         # if have additional params in kwargs
+#         init_dict.update(kwargs)
+#         instance = cls(**init_dict)
+#         instance.init_dict = init_dict
+        
+#         return instance
+
+
+#     def load_pretrained_preys(self, filename):
+#         if not torch.cuda.is_available():
+#             save_dict = torch.load(filename, map_location=torch.device('cpu'))
+#         else:
+#             save_dict = torch.load(filename)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             prey_params = save_dict['agent_params'][self.num_predators:]
+
+#         for i, params in zip(range(self.num_preys), prey_params):
+#             self.preys[i].load_params_without_optims(params)
+
+#         for p in self.preys:
+#             p.policy.eval()
+#             p.target_policy.eval()
+
 """
 get other agents' gaussian policy,
 calculate Q_total and Ai
@@ -616,8 +1459,8 @@ diffusion score from single agent miu_i(a|s)
 Final loss is E_pi^i_new, pi^ -i [A^i + log miu_i] d/ pi_i
 """
 
-
-class SEQ_SRPO(object):
+# naive CTDE SRPO Learning
+class CTDE_SRPO(object):
     def __init__(
         self, 
         agent_init_params, # state & action dim
@@ -668,7 +1511,10 @@ class SEQ_SRPO(object):
 
         config.alg_types = alg_types # used for SRPO_CTDE
 
-        self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config) for agent in alg_types]
+        self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
+                                 output_dim=self.action_dim,
+                                 marginal_prob_std=marginal_prob_std_fn,
+                                 args=config) for agent in alg_types]
         for age in self.agents:
             age.q[0].to(self.device)
 
@@ -676,11 +1522,12 @@ class SEQ_SRPO(object):
             self.num_predators = len(agent_init_params)
             self.num_preys = len(adv_init_params)
 
-            self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+            self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action,
+                                    hidden_dim=self.hidden_dim,
+                                    **params) for params in adv_init_params]
 
         self.niter = 0
   
-
 
     def step(self, observations, explore=False):
         """
@@ -705,64 +1552,61 @@ class SEQ_SRPO(object):
             else:
                 action = self.agents[i].SRPO_policy.select_actions(obs)
                 actions.append(action)
-        return actions
+        return actions    
 
-        # actions = [array([0.99983406, 0...e=float32), array([0.9950481 , 0...e=float32), array([ 0.44896033, ...e=float32)]
-        # observations = [tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]])]
-        # obs = tensor([1, 18])
-    
+    def update(self, samples, t):
+        # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
+        # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
+        # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
 
-    def update(self, sample, agent_i, t):
-
-        curr_agent = self.agents[agent_i]
-
-        # data reconstruction
-        # 参考OMAR，mamujoco提供了state，但是训练用的还是obs
-        if self.is_mamujoco:
-            sample_bridge = {"s": sample["obs"],
-                             "a": sample["action"],
-                             "r": sample["rewards"],
-                             "s_": sample["next_obs"],
-                             "d": sample["done"]
-            }
-        else:
-            sample_bridge = {"s": sample["obs"],
-                             "a": sample["action"],
-                             "r": sample["rewards"],
-                             "s_": sample["next_obs"],
-                             "d": sample["done"]
-            }
-
-        prefix_policy = []
-
-        if agent_i <= 0:
-            pass
-        else:
-            for pre in range(agent_i):
-                # check the first agent non-zero
-                # updated prefix agents
-                prefix_policy.append(self.agents[pre])
-
-        suffix_policy = []
-        if agent_i >= self.nagents:
-            pass
-        else:
-            for suf in range(agent_i+1, self.nagents):
-                # updated prefix agents
-                suffix_policy.append(self.agents[suf])
-
-        # Use Joint Q/A and individual score to update
-        loss_tot, epsilon, guidance = curr_agent.update_SRPO_policy(sample_bridge, prefix_policy, suffix_policy)
-        
-        """ logging metric """
-        if t % self.logging_interval == 0 and not self.no_log:
-            dic = {}
-            dic.update({"SEQ_SRPO loss"+str(agent_i): loss_tot.item()})
-            # dic.update({"diffusion loss"+str(agent_i): epsilon})
-            # dic.update({"Q gradient"+str(agent_i): guidance})
+        joint_a = []
+        joint_s = []
+        for agent_id, current_agent in enumerate(self.agents):
+                   
+            s = samples[agent_id]['obs']
+            current_agent.diffusion_behavior.eval()
+            a_curr = self.agents[agent_id].SRPO_policy(s)
+            joint_s.append(s)
+            joint_a.append(a_curr)  
             
-            log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+        joint_states = torch.cat(joint_s, dim=1)
 
+        # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
+        # joint a = [a1, a2], feed in for qs = q[0].target(joint a, joint s)
+        
+        for agent_id, current_agent in enumerate(self.agents):
+            # get data i with joint s+a
+            if self.is_mamujoco:
+                sample_bridge = {"s": samples[agent_id]["obs"],
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_obs"],
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                }
+            else:
+                sample_bridge = {"s": samples[agent_id]["state"],
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_state"],
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                }
+
+            # Use Joint Q/A and individual score to update
+            loss_tot, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+            
+            """ logging metric """
+            if t % self.logging_interval == 0 and not self.no_log:
+                dic = {}
+                dic.update({"CTDE/SRPO loss"+str(agent_id): loss_tot.item()})
+                dic.update({"CTDE/action errors"+str(agent_id): error_a.item()})
+                # dic.update({"diffusion loss"+str(agent_i): epsilon})
+                # dic.update({"Q gradient"+str(agent_i): guidance})
+                
+                log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
 
     # prepare train() or eval() 
     def prep_training(self, device='cpu'):
@@ -894,9 +1738,584 @@ class SEQ_SRPO(object):
         for p in self.preys:
             p.policy.eval()
             p.target_policy.eval()
+
+
+
+
+# naive SEQ SRPO Learning
+class SEQ_SRPO(object):
+    def __init__(
+        self, 
+        agent_init_params, # state & action dim
+        agent_max_actions, 
+        alg_types, 
+        denoise_steps=20,
+        device = 'cpu',
+        adv_init_params=None,
+        gamma=0.99, # RL discount gamma
+        tau=0.01,  # 这个 tau 是用来 target network soft update的
+        lr=0.01, 
+        hidden_dim=64, 
+        discrete_action=False, 
+        env_id=None,
+        batch_size = 100,
+        config = None,
+        **kwargs
+    ):
+        self.env_id = env_id
+        self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+
+        assert (ma == agent_max_actions[0] for ma in agent_max_actions)
+        self.max_action = agent_max_actions[0]
+        self.min_action = -self.max_action
+        self.hidden_dim = hidden_dim  # 64 for DDPG
+
+        self.nagents = len(alg_types)
+        self.alg_types = alg_types
+        
+        self.tau = tau
+  
+        self.agent_init_params = agent_init_params
+        self.state_dim = self.agent_init_params[0]['state_dim']
+        self.action_dim = self.agent_init_params[0]['action_dim']
+        self.device = device
+        
+        self.gamma = gamma
+        self.lr = lr
+        self.discrete_action = discrete_action
+
+        self.T = denoise_steps
+        self.batch_size = batch_size
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+        config.alg_types = alg_types # used for SRPO_CTDE
+
+        self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
+                                 output_dim=self.action_dim,
+                                 marginal_prob_std=marginal_prob_std_fn,
+                                 args=config) for agent in alg_types]
+        for age in self.agents:
+            age.q[0].to(self.device)
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            self.num_predators = len(agent_init_params)
+            self.num_preys = len(adv_init_params)
+
+            self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action,
+                                    hidden_dim=self.hidden_dim,
+                                    **params) for params in adv_init_params]
+
+        self.niter = 0
+  
+
+    def step(self, observations, explore=False):
+        """
+        Take a step forward in environment with all agents
+        Inputs:
+            observations: List of observations for each agent
+            explore (boolean): Whether or not to add exploration noise
+        Outputs:
+            actions: List of actions for each agent
+        """
+        actions = []
+
+        # nagents = agents + prey (if have)
+        for i, obs in zip(range(self.nagents), observations):   
+            if self.env_id in ['simple_world', 'simple_tag']:
+                if i < self.num_predators:
+                    predator_action = self.agents[i].SRPO_policy.select_actions(obs)  # SRPO use Dilac sample action
+                    actions.append(predator_action)
+                else:
+                    prey_action = self.preys[i - self.num_predators].step(obs, explore=False)
+                    actions.append(prey_action)
+            else:
+                action = self.agents[i].SRPO_policy.select_actions(obs)
+                actions.append(action)
+        return actions    
+
+    def update(self, samples, t):
+        # Loss i = Q(s, a- new, a, a+) + beta score i，考虑 sequential 问题，更新以后再采样新joint action
+        joint_a = []
+        joint_s = []
+        for agent_id, current_agent in enumerate(self.agents):
+                   
+            s = samples[agent_id]['obs']
+            current_agent.diffusion_behavior.eval()
+            a_curr = self.agents[agent_id].SRPO_policy(s)
+            joint_s.append(s)
+            joint_a.append(a_curr)  
+            
+        joint_states = torch.cat(joint_s, dim=1)
+
+        # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
+        # joint a = [a1 old, a2 old], feed in for qs = q[0].target(joint a, joint s)
+        
+        for agent_id, current_agent in enumerate(self.agents):
+            # get data i with joint s+a
+            if self.is_mamujoco:
+                sample_bridge = {"s": samples[agent_id]["obs"],
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_obs"],
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                }
+            else:
+                sample_bridge = {"s": samples[agent_id]["state"],
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_state"],
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                }
+
+            # Use Joint Q/A and individual score to update
+            loss_tot, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+
+            # intermediate policy actions 
+            current_agent.SRPO_policy.eval()
+            a_curr_new = self.agents[agent_id].SRPO_policy(s)
+            joint_a[agent_id] = a_curr_new
+            sample_bridge["a_joint"] = joint_a
+
+            """ logging metric """
+            if t % self.logging_interval == 0 and not self.no_log:
+                dic = {}
+                dic.update({"SEQ/SRPO loss"+str(agent_id): loss_tot.item()})
+                dic.update({"SEQ/action errors"+str(agent_id): error_a.item()})
+                # dic.update({"diffusion loss"+str(agent_i): epsilon})
+                # dic.update({"Q gradient"+str(agent_i): guidance})
+                
+                log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
+    # prepare train() or eval() 
+    def prep_training(self, device='cpu'):
+
+        for a in self.agents:
+            a.diffusion_behavior.train()
+            a.SRPO_policy.train()
+            a.q[0].train()
+
+        fn = lambda x: x.to(device)   
+        for a in self.agents:
+            a.diffusion_behavior = fn(a.diffusion_behavior)
+            a.SRPO_policy = fn(a.SRPO_policy)
+            a.q[0] = fn(a.q[0])
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            for p in self.preys:
+                p.policy = fn(p.policy)
+                p.target_policy = fn(p.target_policy)
+
+    def prep_rollouts(self, device='cpu'):
+        for a in self.agents:
+            a.diffusion_behavior.eval()
+            a.SRPO_policy.eval()
+            a.q[0].eval()
+
+        fn = lambda x: x.to(device)
+
+        for a in self.agents:
+            a.diffusion_behavior = fn(a.diffusion_behavior)
+            a.SRPO_policy = fn(a.SRPO_policy)
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            for p in self.preys:
+                p.policy = fn(p.policy)
+
+
+    @classmethod
+    def init_from_env(cls, env, env_id, env_info=None, agent_alg="diffusion", adversary_alg="ddpg",
+                       gamma=0.95, tau=0.01, lr=0.01, hidden_dim=64,
+                       batch_size=None, denoise_steps=20, config=None, **kwargs):
+        """
+        Instantiate instance of this class from multi-agent environment
+        """
+
+        # create n trainable agents without prey, alg_types = ['diff', 'diff', 'diff']
+        if env_id in ['simple_tag', 'simple_world']:
+            alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
+        elif env_id in ['simple_spread']:
+            alg_types = [agent_alg for atype in env.agent_types]
+        elif env_id in ['HalfCheetah-v2']:
+            alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+
+        agent_init_params = []
+        all_n_actions = []
+        agent_max_actions = []
+        adv_init_params = []
+
+        # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
+        if env_id == 'HalfCheetah-v2':
+            for agent_idx in range(len(alg_types)):
+                acsp = env_info['action_spaces'][agent_idx]
+                num_in_pol = env_info['obs_shape']
+                num_out_pol = acsp.shape[0]
+
+                agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                
+                agent_max_actions.append(acsp.high[0])
+                all_n_actions.append(acsp.shape[0])
+        else:
+            for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
+                num_in_pol = obsp.shape[0]
+                num_out_pol = acsp.shape[0]
+                num_in_critic = num_in_pol + num_out_pol
+
+                if env_id in ['simple_spread']:
+                    agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                    agent_max_actions.append(acsp.high[0])
+                else:
+                    if agent_type == 'adversary':  # adversary 是猎人，agent 是猎物
+                        agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                        agent_max_actions.append(acsp.high[0])
+                    elif agent_type == 'agent':
+                        adv_init_params.append({'num_in_pol': num_in_pol, 'num_out_pol': num_out_pol, 'num_in_critic': num_in_critic})
+
+                all_n_actions.append(acsp.shape[0])
+
+            for i in range(1, len(all_n_actions)):
+                assert (all_n_actions[i] == all_n_actions[0])  # 同时包括了 predator 和 prey 的动作维度
+
+
+        init_dict = {
+            'agent_init_params': agent_init_params,
+            'agent_max_actions': agent_max_actions,
+            'alg_types': alg_types,
+            'denoise_steps': denoise_steps,
+            'device': 'cpu',
+            'adv_init_params': adv_init_params,
+            'gamma': gamma, 
+            'tau': tau,
+            'lr': lr,
+            'hidden_dim': hidden_dim,
+            'discrete_action': False,
+            'env_id': env_id,
+            'batch_size': batch_size,   
+            'config': config,
+        }
+
+        # if have additional params in kwargs
+        init_dict.update(kwargs)
+        instance = cls(**init_dict)
+        instance.init_dict = init_dict
+        
+        return instance
+
+
+    def load_pretrained_preys(self, filename):
+        if not torch.cuda.is_available():
+            save_dict = torch.load(filename, map_location=torch.device('cpu'))
+        else:
+            save_dict = torch.load(filename)
+
+        if self.env_id in ['simple_tag', 'simple_world']:
+            prey_params = save_dict['agent_params'][self.num_predators:]
+
+        for i, params in zip(range(self.num_preys), prey_params):
+            self.preys[i].load_params_without_optims(params)
+
+        for p in self.preys:
+            p.policy.eval()
+            p.target_policy.eval()
+
+
+
+
+# old MARL SRPO Sequencial Learning (更新process可能有问题,把别人的policy注入进来进行采样)
+# class SEQ_SRPO(object):
+#     def __init__(
+#         self, 
+#         agent_init_params, # state & action dim
+#         agent_max_actions, 
+#         alg_types, 
+#         denoise_steps=20,
+#         device = 'cpu',
+#         adv_init_params=None,
+#         gamma=0.99, # RL discount gamma
+#         tau=0.01,  # 这个 tau 是用来 target network soft update的
+#         lr=0.01, 
+#         hidden_dim=64, 
+#         discrete_action=False, 
+#         env_id=None,
+#         batch_size = 100,
+#         config = None,
+#         **kwargs
+#     ):
+#         self.env_id = env_id
+#         self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+
+#         assert (ma == agent_max_actions[0] for ma in agent_max_actions)
+#         self.max_action = agent_max_actions[0]
+#         self.min_action = -self.max_action
+#         self.hidden_dim = hidden_dim  # 64 for DDPG
+
+#         self.nagents = len(alg_types)
+#         self.alg_types = alg_types
+        
+#         self.tau = tau
+  
+#         self.agent_init_params = agent_init_params
+#         self.state_dim = self.agent_init_params[0]['state_dim']
+#         self.action_dim = self.agent_init_params[0]['action_dim']
+#         self.device = device
+        
+#         self.gamma = gamma
+#         self.lr = lr
+#         self.discrete_action = discrete_action
+
+#         self.T = denoise_steps
+#         self.batch_size = batch_size
+
+#         for k, v in kwargs.items():
+#             setattr(self, k, v)
+
+#         marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+#         config.alg_types = alg_types # used for SRPO_SEQ
+
+#         self.agents = [SRPO_SEQ(input_dim = self.state_dim+self.action_dim, output_dim=self.action_dim, marginal_prob_std=marginal_prob_std_fn, args=config) for agent in alg_types]
+#         for age in self.agents:
+#             age.q[0].to(self.device)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             self.num_predators = len(agent_init_params)
+#             self.num_preys = len(adv_init_params)
+
+#             self.preys = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+
+#         self.niter = 0
+  
+
+
+#     def step(self, observations, explore=False):
+#         """
+#         Take a step forward in environment with all agents
+#         Inputs:
+#             observations: List of observations for each agent
+#             explore (boolean): Whether or not to add exploration noise
+#         Outputs:
+#             actions: List of actions for each agent
+#         """
+#         actions = []
+
+#         # nagents = agents + prey (if have)
+#         for i, obs in zip(range(self.nagents), observations):   
+#             if self.env_id in ['simple_world', 'simple_tag']:
+#                 if i < self.num_predators:
+#                     predator_action = self.agents[i].SRPO_policy.select_actions(obs)  # SRPO use Dilac sample action
+#                     actions.append(predator_action)
+#                 else:
+#                     prey_action = self.preys[i - self.num_predators].step(obs, explore=False)
+#                     actions.append(prey_action)
+#             else:
+#                 action = self.agents[i].SRPO_policy.select_actions(obs)
+#                 actions.append(action)
+#         return actions
+
+#         # actions = [array([0.99983406, 0...e=float32), array([0.9950481 , 0...e=float32), array([ 0.44896033, ...e=float32)]
+#         # observations = [tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]]), tensor([[ 0.0000,  0... 0.0000]])]
+#         # obs = tensor([1, 18])
+    
+
+#     def update(self, samples, agent_i, t):
+
+#         sample = samples[agent_i]  # 用于计算策略的第index个数据
+
+#         curr_agent = self.agents[agent_i]
+
+#         # 构建joint state
+#         # for index, partialdata in enumerate(samples):
+#         joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
+
+
+#         # data reconstruction
+#         # 参考OMAR，mamujoco提供了state，但是训练用的还是obs
+#         if self.is_mamujoco:
+#             sample_bridge = {"s": sample["obs"],
+#                              "a": sample["action"],
+#                              "r": sample["rewards"],
+#                              "s_": sample["next_obs"],
+#                              "d": sample["done"],
+#                              "s_joint": joint_states,
+#             }
+#         else:
+#             sample_bridge = {"s": sample["obs"],
+#                              "a": sample["action"],
+#                              "r": sample["rewards"],
+#                              "s_": sample["next_obs"],
+#                              "d": sample["done"],
+#                              "s_joint": joint_states,
+#             }
+
+#         prefix_policy = []
+
+#         if agent_i <= 0:
+#             pass
+#         else:
+#             for pre in range(agent_i):
+#                 # check the first agent non-zero
+#                 # updated prefix agents
+#                 prefix_policy.append(self.agents[pre])
+
+#         suffix_policy = []
+#         if agent_i >= self.nagents:
+#             pass
+#         else:
+#             for suf in range(agent_i+1, self.nagents):
+#                 # updated prefix agents
+#                 suffix_policy.append(self.agents[suf])
+
+#         # Use Joint Q/A and individual score to update
+#         loss_tot, epsilon, guidance = curr_agent.update_SRPO_policy(sample_bridge, prefix_policy, suffix_policy)
+        
+#         """ logging metric """
+#         if t % self.logging_interval == 0 and not self.no_log:
+#             dic = {}
+#             dic.update({"SEQ_SRPO loss"+str(agent_i): loss_tot.item()})
+#             # dic.update({"diffusion loss"+str(agent_i): epsilon})
+#             # dic.update({"Q gradient"+str(agent_i): guidance})
+            
+#             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+
+
+#     # prepare train() or eval() 
+#     def prep_training(self, device='cpu'):
+
+#         for a in self.agents:
+#             a.diffusion_behavior.train()
+#             a.SRPO_policy.train()
+#             a.q[0].train()
+
+#         fn = lambda x: x.to(device)   
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+#             a.q[0] = fn(a.q[0])
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+#                 p.target_policy = fn(p.target_policy)
+
+#     def prep_rollouts(self, device='cpu'):
+#         for a in self.agents:
+#             a.diffusion_behavior.eval()
+#             a.SRPO_policy.eval()
+#             a.q[0].eval()
+
+#         fn = lambda x: x.to(device)
+
+#         for a in self.agents:
+#             a.diffusion_behavior = fn(a.diffusion_behavior)
+#             a.SRPO_policy = fn(a.SRPO_policy)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             for p in self.preys:
+#                 p.policy = fn(p.policy)
+
+
+#     @classmethod
+#     def init_from_env(cls, env, env_id, env_info=None, agent_alg="diffusion", adversary_alg="ddpg",
+#                        gamma=0.95, tau=0.01, lr=0.01, hidden_dim=64,
+#                        batch_size=None, denoise_steps=20, config=None, **kwargs):
+#         """
+#         Instantiate instance of this class from multi-agent environment
+#         """
+
+#         # create n trainable agents without prey, alg_types = ['diff', 'diff', 'diff']
+#         if env_id in ['simple_tag', 'simple_world']:
+#             alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
+#         elif env_id in ['simple_spread']:
+#             alg_types = [agent_alg for atype in env.agent_types]
+#         elif env_id in ['HalfCheetah-v2']:
+#             alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+
+#         agent_init_params = []
+#         all_n_actions = []
+#         agent_max_actions = []
+#         adv_init_params = []
+
+#         # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
+#         if env_id == 'HalfCheetah-v2':
+#             for agent_idx in range(len(alg_types)):
+#                 acsp = env_info['action_spaces'][agent_idx]
+#                 num_in_pol = env_info['obs_shape']
+#                 num_out_pol = acsp.shape[0]
+
+#                 agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                
+#                 agent_max_actions.append(acsp.high[0])
+#                 all_n_actions.append(acsp.shape[0])
+#         else:
+#             for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
+#                 num_in_pol = obsp.shape[0]
+#                 num_out_pol = acsp.shape[0]
+#                 num_in_critic = num_in_pol + num_out_pol
+
+#                 if env_id in ['simple_spread']:
+#                     agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                     agent_max_actions.append(acsp.high[0])
+#                 else:
+#                     if agent_type == 'adversary':  # adversary 是猎人，agent 是猎物
+#                         agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+#                         agent_max_actions.append(acsp.high[0])
+#                     elif agent_type == 'agent':
+#                         adv_init_params.append({'num_in_pol': num_in_pol, 'num_out_pol': num_out_pol, 'num_in_critic': num_in_critic})
+
+#                 all_n_actions.append(acsp.shape[0])
+
+#             for i in range(1, len(all_n_actions)):
+#                 assert (all_n_actions[i] == all_n_actions[0])  # 同时包括了 predator 和 prey 的动作维度
+
+
+#         init_dict = {
+#             'agent_init_params': agent_init_params,
+#             'agent_max_actions': agent_max_actions,
+#             'alg_types': alg_types,
+#             'denoise_steps': denoise_steps,
+#             'device': 'cpu',
+#             'adv_init_params': adv_init_params,
+#             'gamma': gamma, 
+#             'tau': tau,
+#             'lr': lr,
+#             'hidden_dim': hidden_dim,
+#             'discrete_action': False,
+#             'env_id': env_id,
+#             'batch_size': batch_size,   
+#             'config': config,
+#         }
+
+#         # if have additional params in kwargs
+#         init_dict.update(kwargs)
+#         instance = cls(**init_dict)
+#         instance.init_dict = init_dict
+        
+#         return instance
+
+
+#     def load_pretrained_preys(self, filename):
+#         if not torch.cuda.is_available():
+#             save_dict = torch.load(filename, map_location=torch.device('cpu'))
+#         else:
+#             save_dict = torch.load(filename)
+
+#         if self.env_id in ['simple_tag', 'simple_world']:
+#             prey_params = save_dict['agent_params'][self.num_predators:]
+
+#         for i, params in zip(range(self.num_preys), prey_params):
+#             self.preys[i].load_params_without_optims(params)
+
+#         for p in self.preys:
+#             p.policy.eval()
+#             p.target_policy.eval()
    
-
-
 
 # class VD_SRPO(object):
 #     def __init__(self,

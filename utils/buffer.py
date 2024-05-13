@@ -93,8 +93,14 @@ class ReplayBuffer(object):
             curr_rews = np.load(dir + '/' + 'rews_{}.npy'.format(i))
             curr_next_obs = np.load(dir + '/' + 'next_obs_{}.npy'.format(i))
             curr_dones = np.load(dir + '/' + 'dones_{}.npy'.format(i))
-        
+
+            if "bandit" in dir:
+                curr_acs = curr_acs.reshape(-1,1)
+
+                
             num_experiences = curr_obs.shape[0]
+
+            # random_indices = np.random.choice(int(100000), size=self.max_steps, replace=False)
 
             self.obs_buffs[i][:num_experiences] = curr_obs
             self.ac_buffs[i][:num_experiences] = curr_acs
@@ -109,6 +115,9 @@ class ReplayBuffer(object):
                 curr_next_states = np.load(dir + '/' + 'next_states_{}.npy'.format(i))
                 self.state_buffs[i][:num_experiences] = curr_states
                 self.next_state_buffs[i][:num_experiences] = curr_next_states
-
+        
+        # 改成 dataset subsample
         self.filled_i = num_experiences
+        # self.filled_i = self.max_steps
+
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
