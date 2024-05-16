@@ -5,7 +5,7 @@ datanums=0    # 1 2 3
 
 ## algo seletion
 difftype="SRPO"     # DQL
-marltype="JAL"      # JAL, VD, SEQ
+marltype="CTDE"      # JAL, VD, SEQ
 TASK="HalfCheetah-v2"
 device=1
 

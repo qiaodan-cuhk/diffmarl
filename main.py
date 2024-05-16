@@ -299,6 +299,7 @@ def offline_train(config):
                            "dataset_ave_reward": replay_buffer.ave_reward,
                            "algo": algo_name,
                            "seed": config.seed,
+                           "reg beta": config.beta,
                            "Denoise_steps": config.T,
                            "batch size": config.batch_size,
                            "discount factor": config.gamma,
@@ -347,13 +348,6 @@ def offline_train(config):
             # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，以及other policy actions
             # 一起输入给进去再分开，更新体现在ma agent内部
             ma_agent.update(samples, t)
-        # elif config.marltype == "SEQ":
-        # used for old SEQ srpo
-        #     nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2'] else ma_agent.num_predators
-        #     samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
-        #     # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，一起给进去再分开
-        #     for a_i in range(nagents):
-        #         ma_agent.update(samples, a_i, t)
         else:  # QMIX_SRPO
             pass
             

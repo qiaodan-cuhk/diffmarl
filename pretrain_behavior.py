@@ -200,7 +200,7 @@ def pretrain_behavior_args():
     parser.add_argument("--t_embed_dims", default=64, type=int)
     parser.add_argument("--sa_embed_dims", default=32, type=int)
     parser.add_argument("--resnet_hidden_dim", default=512, type=int)   # ResNet MLP hidden dim 
-    parser.add_argument("--learning_rates", default=3e-3, type=float)
+    parser.add_argument("--learning_rates", default=3e-4, type=float)
     parser.add_argument("--lr_anneal", default=True, type=bool)
 
 
