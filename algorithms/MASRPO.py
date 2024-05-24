@@ -8,11 +8,12 @@ from utils.noise import action_noise
 
 import copy
 import torch.nn as nn
-from .SRPO import SRPO, SRPO_CTDE
+from .SRPO import SRPO, SRPO_CTDE, SRPO_ssd
 
 from tensorboard_logger import log_value
 
 import functools
+
 
 
 # SRPO marginal_prob_std\\\
@@ -62,7 +63,7 @@ class BASE_SRPO(object):
         **kwargs
     ):
         self.env_id = env_id
-        self.is_mamujoco = True if self.env_id == 'HalfCheetah-v2' else False
+        self.is_mamujoco = True if self.env_id in ['HalfCheetah-v2', 'bandit'] else False
 
         assert (ma == agent_max_actions[0] for ma in agent_max_actions)
         self.max_action = agent_max_actions[0]
@@ -77,6 +78,7 @@ class BASE_SRPO(object):
         self.state_dim = self.agent_init_params[0]['state_dim']
         self.action_dim = self.agent_init_params[0]['action_dim']
         self.device = device
+        self.config = config
         
         self.gamma = gamma
         self.lr = lr
@@ -134,7 +136,7 @@ class BASE_SRPO(object):
         # obs = tensor([1, 18])
     
 
-    def update(self, sample, agent_i, t):
+    def update(self, sample, agent_i, t, run):
 
         curr_agent = self.agents[agent_i]
 
@@ -155,7 +157,11 @@ class BASE_SRPO(object):
                              "d": sample["done"]
             }
 
-        loss_tot, epsilon, guidance, error_a = curr_agent.update_SRPO_policy(sample_bridge)
+        # loss_tot, epsilon, guidance, error_a = curr_agent.update_SRPO_policy(sample_bridge)
+        if self.config.env_id == 'bandit':
+            loss_tot, epsilon, guidance, error_a, a_plt_i = curr_agent.update_SRPO_policy(sample_bridge)
+        else:
+            loss_tot, epsilon, guidance, error_a = curr_agent.update_SRPO_policy(sample_bridge)
         
         """ logging metric """
         if t % self.logging_interval == 0 and not self.no_log:
@@ -166,6 +172,11 @@ class BASE_SRPO(object):
             # dic.update({"Q gradient"+str(agent_i): guidance})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+            run.log({"IND/SRPO loss"+str(agent_i): loss_tot,
+                     "IND/action errors"+str(agent_i): error_a.item()})
+            
+        if self.config.env_id == 'bandit':
+            return epsilon, guidance, a_plt_i
 
     # prepare train() or eval() 
     def prep_training(self, device='cpu'):
@@ -218,6 +229,8 @@ class BASE_SRPO(object):
             alg_types = [agent_alg for atype in env.agent_types]
         elif env_id in ['HalfCheetah-v2']:
             alg_types = [agent_alg for atype in range(env_info['n_agents'])]
+        elif env_id in ['bandit']:
+            alg_types = [agent_alg for atype in range(2)]
 
         agent_init_params = []
         all_n_actions = []
@@ -235,7 +248,21 @@ class BASE_SRPO(object):
                 
                 agent_max_actions.append(acsp.high[0])
                 all_n_actions.append(acsp.shape[0])
-        else:
+        elif env_id == "bandit":
+            for acsp, obsp in zip(env.action_space, env.observation_space):
+                num_in_pol = obsp.shape[0]
+                num_out_pol = acsp.shape[0]
+                num_in_critic = num_in_pol + num_out_pol
+
+                
+                agent_init_params.append({'state_dim': num_in_pol, 'action_dim': num_out_pol})
+                agent_max_actions.append(acsp.high[0])
+                
+                all_n_actions.append(acsp.shape[0])
+
+            for i in range(1, len(all_n_actions)):
+                assert (all_n_actions[i] == all_n_actions[0])  
+        else:  # MPE env
             for acsp, obsp, agent_type in zip(env.action_space, env.observation_space, env.agent_types):
                 num_in_pol = obsp.shape[0]
                 num_out_pol = acsp.shape[0]
@@ -433,7 +460,7 @@ class JAL_SRPO(BASE_SRPO):
         return actions
 
 
-    def update(self, sample, t):
+    def update(self, sample, t, run):
 
         JAL_agent = self.agents[0]
 
@@ -467,7 +494,12 @@ class JAL_SRPO(BASE_SRPO):
                              "d": jal_done
             }
 
-        loss_tot, epsilon, guidance, error_a = JAL_agent.update_SRPO_policy(sample_bridge)
+        if self.config.env_id == 'bandit':
+            loss_tot, episilon, guidance, error_a, a_plt = JAL_agent.update_SRPO_policy(sample_bridge)
+        else:
+            loss_tot, episilon, guidance, error_a = JAL_agent.update_SRPO_policy(sample_bridge)
+
+        # loss_tot, epsilon, guidance, error_a = JAL_agent.update_SRPO_policy(sample_bridge)
         
         """ logging metric """
         if t % self.logging_interval == 0 and not self.no_log:
@@ -478,6 +510,11 @@ class JAL_SRPO(BASE_SRPO):
             dic.update({"JAL/action errors": error_a.item()})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+            run.log({"JAL/SRPO loss": loss_tot,
+                     "JAL/action errors": error_a.item()})
+        
+        if self.config.env_id == 'bandit':
+            return  episilon, guidance, a_plt
 
 
 """
@@ -537,7 +574,7 @@ class CTDE_SRPO(BASE_SRPO):
             age.q[0].to(self.device)
 
 
-    def update(self, samples, t):
+    def update(self, samples, t, run):
         # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
         # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
         # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
@@ -556,6 +593,10 @@ class CTDE_SRPO(BASE_SRPO):
 
         # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
         # joint a = [a1, a2], feed in for qs = q[0].target(joint a, joint s)
+        if self.config.env_id == 'bandit':
+            epi_all = []
+            guide_all = []
+            a_plt_all = []
         
         for agent_id, current_agent in enumerate(self.agents):
             # get data i with joint s+a
@@ -579,7 +620,15 @@ class CTDE_SRPO(BASE_SRPO):
                 }
 
             # Use Joint Q/A and individual score to update
-            loss_tot, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+            if self.config.env_id == 'bandit':
+                loss_tot, episilon, guidance, error_a, a_plt_i = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+            else:
+                loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+                
+            if self.config.env_id == 'bandit':
+                epi_all.append(episilon)
+                guide_all.append(guidance)
+                a_plt_all.append(a_plt_i)
             
             """ logging metric """
             if t % self.logging_interval == 0 and not self.no_log:
@@ -590,10 +639,16 @@ class CTDE_SRPO(BASE_SRPO):
                 # dic.update({"Q gradient"+str(agent_i): guidance})
                 
                 log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+                run.log({"CTDE/SRPO loss"+str(agent_id): loss_tot.item(),
+                         "CTDE/action errors"+str(agent_id): error_a.item()})
+                
+
+        
+        if self.config.env_id == 'bandit':
+            return epi_all, guide_all, a_plt_all
 
 
 
-# naive SEQ SRPO Learning
 class SEQ_SRPO(CTDE_SRPO):
     def __init__(
         self, 
@@ -628,24 +683,48 @@ class SEQ_SRPO(CTDE_SRPO):
         batch_size = batch_size,
         config = config,
         **kwargs)
-  
 
-    def update(self, samples, t):
-        # Loss i = Q(s, a- new, a, a+) + beta score i，考虑 sequential 问题，更新以后再采样新joint action
+
+        marginal_prob_std_fn = functools.partial(marginal_prob_std, device=self.device, beta_1=20.0)
+
+        config.alg_types = alg_types # used for SRPO_CTDE
+
+        # 第一个agent不变，策略、score、critic都是跟CTDE一样，更新也是
+        # 第二个agent仅改变score，critic和策略网络不变
+        self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
+                                 output_dim=self.action_dim,
+                                 marginal_prob_std=marginal_prob_std_fn,
+                                 args=config),
+                        SRPO_ssd(input_dim = self.state_dim+self.action_dim+self.action_dim,
+                                 output_dim=self.action_dim,
+                                 marginal_prob_std=marginal_prob_std_fn,
+                                 args=config)]
+        for age in self.agents:
+            age.q[0].to(self.device)
+
+    def update(self, samples, t, run):
+        # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
+        # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
+        # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
+
         joint_a = []
         joint_s = []
         for agent_id, current_agent in enumerate(self.agents):
                    
             s = samples[agent_id]['obs']
             current_agent.diffusion_behavior.eval()
-            a_curr = self.agents[agent_id].SRPO_policy(s)
+            a_curr = self.agents[agent_id].SRPO_policy(s).detach()   #用作计算Q值的joint actions，detach gradients且不需要添加gradient
             joint_s.append(s)
             joint_a.append(a_curr)  
             
         joint_states = torch.cat(joint_s, dim=1)
 
         # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
-        # joint a = [a1 old, a2 old], feed in for qs = q[0].target(joint a, joint s)
+        # joint a = [a1, a2], feed in for qs = q[0].target(joint a, joint s)
+        if self.config.env_id == 'bandit':
+            epi_all = []
+            guide_all = []
+            a_plt_all = []
         
         for agent_id, current_agent in enumerate(self.agents):
             # get data i with joint s+a
@@ -669,14 +748,16 @@ class SEQ_SRPO(CTDE_SRPO):
                 }
 
             # Use Joint Q/A and individual score to update
-            loss_tot, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
-
-            # intermediate policy actions 
-            current_agent.SRPO_policy.eval()
-            a_curr_new = self.agents[agent_id].SRPO_policy(s)
-            joint_a[agent_id] = a_curr_new
-            sample_bridge["a_joint"] = joint_a
-
+            if self.config.env_id == 'bandit':
+                loss_tot, episilon, guidance, error_a, a_plt_i = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+            else:
+                loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+                
+            if self.config.env_id == 'bandit':
+                epi_all.append(episilon)
+                guide_all.append(guidance)
+                a_plt_all.append(a_plt_i)
+            
             """ logging metric """
             if t % self.logging_interval == 0 and not self.no_log:
                 dic = {}
@@ -686,6 +767,123 @@ class SEQ_SRPO(CTDE_SRPO):
                 # dic.update({"Q gradient"+str(agent_i): guidance})
                 
                 log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+                run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
+                         "SEQ/action errors"+str(agent_id): error_a.item()})
+                
+        
+        if self.config.env_id == 'bandit':
+            return epi_all, guide_all, a_plt_all
+  
+
+
+# naive SEQ SRPO Learning
+# class SEQ_SRPO(CTDE_SRPO):
+#     def __init__(
+#         self, 
+#         agent_init_params, # state & action dim
+#         agent_max_actions, 
+#         alg_types, 
+#         denoise_steps=20,
+#         device = 'cpu',
+#         adv_init_params=None,
+#         gamma=0.99, # RL discount gamma
+#         tau=0.01,  # 这个 tau 是用来 target network soft update的
+#         lr=0.01, 
+#         hidden_dim=64, 
+#         discrete_action=False, 
+#         env_id=None,
+#         batch_size = 100,
+#         config = None,
+#         **kwargs
+#     ):
+#         super().__init__(agent_init_params, # state & action dim
+#         agent_max_actions, 
+#         alg_types, 
+#         denoise_steps=denoise_steps,
+#         device = device,
+#         adv_init_params=adv_init_params,
+#         gamma=gamma, # RL discount gamma
+#         tau=tau,  # 这个 tau 是用来 target network soft update的
+#         lr=lr, 
+#         hidden_dim=hidden_dim, 
+#         discrete_action=discrete_action, 
+#         env_id=env_id,
+#         batch_size = batch_size,
+#         config = config,
+#         **kwargs)
+  
+
+#     def update(self, samples, t):
+#         # Loss i = Q(s, a- new, a, a+) + beta score i，考虑 sequential 问题，更新以后再采样新joint action
+#         joint_a = []
+#         joint_s = []
+#         for agent_id, current_agent in enumerate(self.agents):
+                   
+#             s = samples[agent_id]['obs']
+#             current_agent.diffusion_behavior.eval()
+#             a_curr = self.agents[agent_id].SRPO_policy(s)
+#             joint_s.append(s)
+#             joint_a.append(a_curr)  
+            
+#         joint_states = torch.cat(joint_s, dim=1)
+
+#         # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
+#         # joint a = [a1 old, a2 old], feed in for qs = q[0].target(joint a, joint s)
+
+#         if self.config.env_id == 'bandit':
+#             epi_all = []
+#             guide_all = []
+#             a_plt_all = []
+        
+#         for agent_id, current_agent in enumerate(self.agents):
+#             # get data i with joint s+a
+#             if self.is_mamujoco:
+#                 sample_bridge = {"s": samples[agent_id]["obs"],
+#                                 "a": samples[agent_id]["action"],
+#                                 "r": samples[agent_id]["rewards"],
+#                                 "s_": samples[agent_id]["next_obs"],
+#                                 "d": samples[agent_id]["done"],
+#                                 "s_joint": joint_states,
+#                                 "a_joint": joint_a,
+#                 }
+#             else:
+#                 sample_bridge = {"s": samples[agent_id]["state"],
+#                                 "a": samples[agent_id]["action"],
+#                                 "r": samples[agent_id]["rewards"],
+#                                 "s_": samples[agent_id]["next_state"],
+#                                 "d": samples[agent_id]["done"],
+#                                 "s_joint": joint_states,
+#                                 "a_joint": joint_a,
+#                 }
+
+#             # Use Joint Q/A and individual score to update
+#             if self.config.env_id == 'bandit':
+#                 loss_tot, episilon, guidance, error_a, a_plt_i = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+#             else:
+#                 loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+
+#             # intermediate policy actions 
+#             current_agent.SRPO_policy.eval()
+#             a_curr_new = self.agents[agent_id].SRPO_policy(s)
+#             joint_a[agent_id] = a_curr_new
+#             sample_bridge["a_joint"] = joint_a
+
+#             """ logging metric """
+#             if t % self.logging_interval == 0 and not self.no_log:
+#                 dic = {}
+#                 dic.update({"SEQ/SRPO loss"+str(agent_id): loss_tot.item()})
+#                 dic.update({"SEQ/action errors"+str(agent_id): error_a.item()})
+#                 # dic.update({"diffusion loss"+str(agent_i): epsilon})
+#                 # dic.update({"Q gradient"+str(agent_i): guidance})
+#                 log_and_print(list(dic.keys()), list(dic.values()), t, multi=True)
+#                 if self.config.env_id == 'bandit':
+#                     epi_all.append(episilon)
+#                     guide_all.append(guidance)
+#                     a_plt_all.append(a_plt_i)
+
+                
+#         if self.config.env_id == 'bandit':
+#             return epi_all, guide_all, a_plt_all
 
 
 

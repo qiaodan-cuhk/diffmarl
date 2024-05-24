@@ -12,7 +12,7 @@ class SRPO(nn.Module):
         self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=args.learning_rates)
         self.diffusion_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.diffusion_optimizer, T_max=2000000, eta_min=1e-5)
         self.SRPO_policy = Dirac_Policy(output_dim, input_dim-output_dim, layer=args.policy_layer).to(args.device)
-        self.SRPO_policy_optimizer = torch.optim.Adam(self.SRPO_policy.parameters(), lr=3e-4)
+        self.SRPO_policy_optimizer = torch.optim.Adam(self.SRPO_policy.parameters(), lr=args.dilac_lr)
         self.SRPO_policy_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.SRPO_policy_optimizer, T_max=args.n_policy_epochs * 10000, eta_min=0.)
 
         self.marginal_prob_std = marginal_prob_std
@@ -75,7 +75,10 @@ class SRPO(nn.Module):
 
         error_a = torch.mean(data['a'] - a)
 
-        return loss, episilon, guidance, error_a
+        if self.args.env_id == 'bandit':
+            return loss, episilon, guidance, error_a, a
+        else:
+            return loss, episilon, guidance, error_a
     
 
 # SRPO for Seq_MASRPO, which loads joint Q and ind diffusion
@@ -166,7 +169,111 @@ class SRPO_CTDE(nn.Module):
 
         error_a = torch.mean(data['a'] - a)
 
-        return loss, error_a
+        if self.args.env_id == 'bandit':
+            return loss, episilon, guidance, error_a, a
+        else:
+            return loss, episilon, guidance, error_a
+        
+# 第二个agent的policy维度需要调整，policy维度并没有变化
+class SRPO_ssd(nn.Module):
+    def __init__(self, input_dim, output_dim, marginal_prob_std, args=None):
+        super().__init__()
+        # diffusion model is individual
+        # input state+2action, output action
+        self.diffusion_behavior = ScoreNet_IDQL(input_dim, output_dim, marginal_prob_std, embed_dim=args.t_GassProj_dims, args=args)
+        self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=args.learning_rates)
+        self.diffusion_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.diffusion_optimizer, T_max=2000000, eta_min=1e-5)
+        # self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=3e-4)
+        # SRPO dilac policy is individual
+        self.SRPO_policy = Dirac_Policy(output_dim, input_dim-2*output_dim, layer=args.policy_layer).to(args.device)
+        # input=s+2a, output=a
+        self.SRPO_policy_optimizer = torch.optim.Adam(self.SRPO_policy.parameters(), lr=3e-4)
+        self.SRPO_policy_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.SRPO_policy_optimizer, T_max=args.n_policy_epochs * 10000, eta_min=0.)
+
+        self.marginal_prob_std = marginal_prob_std
+        self.args = args
+        self.output_dim = output_dim
+        self.step = 0
+        
+        # input = state + action, output = action
+        # here we load a centralized/advantage Q value with IQL (can be replaced by ICQ/OMAR)
+        n_agent_numbers = len(args.alg_types)
+        self.q = []        
+        self.q.append(IQL_Critic(adim=output_dim*n_agent_numbers, sdim=(input_dim-2*output_dim)*n_agent_numbers, args=args))
+        # for mamujoco halfcheetah, state is 6 and action is 3*2
+        # input joint s, output joint a
+
+    def update_SRPO_policy(self, data, agent_id):
+        s = data['s']        
+        s_joint = data['s_joint'] # 用于计算Q值的condition
+        a_joint = data['a_joint'] # 用于计算Q值的action
+
+        self.diffusion_behavior.eval()
+    
+        a = self.SRPO_policy(s)
+        
+            
+        t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
+        # random noising time t
+        alpha_t, std = self.marginal_prob_std(t)
+        z = torch.randn_like(a)
+        perturbed_a = a * alpha_t[..., None] + z * std[..., None]
+        # add noise to policy action, generate a_t
+
+
+        s_condition = torch.cat((s, a_joint[0]), dim=1).to(self.args.device)
+        # 第二个 agent score 维度是s+a
+
+        with torch.no_grad():
+            episilon = self.diffusion_behavior(perturbed_a, t, s_condition).detach()  # diffusion model prediction
+            if "noise" in self.args.WT:
+                episilon = episilon - z
+
+        if "VDS" in self.args.WT:
+            wt = std ** 2
+        elif "stable" in self.args.WT:
+            wt = 1.0
+        elif "score" in self.args.WT:
+            wt = alpha_t / std
+        else:
+            assert False
+
+        detach_a = a.detach().requires_grad_(True)
+        a_joint[agent_id] = detach_a
+
+        detach_a_joint = torch.cat(a_joint, dim=1)
+
+        # Dilac policy action and Q(s, a) 这里用的是JAL Q(state_tot, action_tot) s要改成concate的
+        qs = self.q[0].q0_target.both(detach_a_joint, s_joint)  
+        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0
+        self.SRPO_policy.q = torch.mean(q)
+
+
+        guidance =  torch.autograd.grad(torch.sum(q), detach_a)[0].detach()
+        # dq/da gradient
+
+        if self.args.regq:
+            guidance_norm = torch.mean(guidance ** 2, dim=-1, keepdim=True).sqrt()
+            guidance = guidance / guidance_norm
+
+        # (Q tot 对 a_i 求梯度 + score i)
+
+        loss = (episilon * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+
+        # max Q - epsilon = min epsilon - Q
+        loss = loss.mean()
+        self.SRPO_policy_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.SRPO_policy_optimizer.step()
+        self.SRPO_policy_lr_scheduler.step()
+        self.diffusion_behavior.train()
+
+        error_a = torch.mean(data['a'] - a)
+
+        if self.args.env_id == 'bandit':
+            return loss, episilon, guidance, error_a, a
+        else:
+            return loss, episilon, guidance, error_a
     
 
 class MASRPO_Behavior(nn.Module):

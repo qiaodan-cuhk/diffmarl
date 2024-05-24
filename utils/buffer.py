@@ -107,8 +107,14 @@ class ReplayBuffer(object):
             self.rew_buffs[i][:num_experiences] = curr_rews * rew_scale
             self.next_obs_buffs[i][:num_experiences] = curr_next_obs
             self.done_buffs[i][:num_experiences] = curr_dones
-            self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / np.sum(self.done_buffs[i][:num_experiences])
-            self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+
+            if self.is_mamujoco:
+                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / np.sum(self.done_buffs[i][:num_experiences])
+                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+            else:
+                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / (num_experiences/25)  # 根据main.py, MPE episode length eval is 25
+                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+
 
             if self.is_mamujoco:
                 curr_states = np.load(dir + '/' + 'states_{}.npy'.format(i))

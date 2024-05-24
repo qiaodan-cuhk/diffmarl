@@ -6,18 +6,32 @@ import torch
 import tqdm
 import argparse
 import datetime
+from gym.spaces import Box, Discrete
+
+from utils.buffer import ReplayBuffer
+
+from utils.make_env import make_env
+from utils.env_wrappers import DummyVecEnv
 
 try:
     from multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
     print ('MujocoMulti not installed')
 
+from bandit import ContinuousBanditEnv
+
 from torch.utils.tensorboard import SummaryWriter
 from algorithms.SRPO import MASRPO_IQL
 # from utils import get_args, pallaral_simple_eval_policy
 
-from utils.buffer import ReplayBuffer
-from bandit import ContinuousBanditEnv
+# make parallel MA-Env
+def make_parallel_env(env_id, seed, discrete_action):
+    def get_env_fn(rank):
+        env = make_env(env_id, discrete_action=discrete_action)
+        env.seed(seed + rank * 1000)
+        np.random.seed(seed + rank * 1000)
+        return env
+    return DummyVecEnv([get_env_fn(0)])
 
 
 # Q(s, a_i)
@@ -76,7 +90,7 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_ep
             torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
             # SRPO_premodels/env_id_level/IND/critic_1_epoch150.pth
 
-# Q(s, a_0, a_n)
+# MPE 的 JAL Q 需要修改
 def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
@@ -191,19 +205,36 @@ def critic(args):
     elif args.env_id == 'bandit':
         env = ContinuousBanditEnv()
         env_info = env.env_info
-    
-    each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
-    # MaMujuco use obs as input
-    each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
-    each_action_shape = [acsp.shape[0] for acsp in env.action_space]
+    elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
+        env = make_parallel_env(args.env_id, args.seed, args.discrete_action)
+        env_args, env_info = None, None
+    else:   
+        print("Env not in MaMujoco, bandit, MPE")
+
+    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+        each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
+        # MaMujuco use obs as input
+        each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
+        each_action_shape = [acsp.shape[0] for acsp in env.action_space]
+        agent_num = len(each_action_shape) 
+        state_dim = each_obs_shape[0]
+        action_dim = each_action_shape[0]
+    elif args.env_id in ['simple_spread']:
+        each_state_shape = [obsp.shape[0] for obsp in env.observation_space]
+        each_action_shape = [acsp.shape[0] for acsp in env.action_space]
+        each_action_max = [acsp.high[0] for acsp in env.action_space]
+        agent_num = len(each_action_shape) 
+        state_dim = each_state_shape[0]
+        action_dim = each_action_shape[0]
+        action_max = each_action_max[0]
+    elif args.env_id in ['simple_tag', 'simple_world']:
+        pass
+        # 这里agents区分prey和predators
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    agent_num = len(each_action_shape) 
-    state_dim = each_obs_shape[0]
-    action_dim = each_action_shape[0]
-
+    
     if args.srpo_mode == 'IND':
         score_model= [MASRPO_IQL(input_dim=state_dim+action_dim, output_dim=action_dim, args=args).to(args.device) for agent in range(agent_num)]
         for model in score_model:
@@ -214,14 +245,32 @@ def critic(args):
         # In MaMujuco, input is concated obs
 
 
-    replay_buffer = ReplayBuffer(
+    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+        replay_buffer = ReplayBuffer(
+                args.buffer_length, agent_num,
+                [env_info['obs_shape'] for _ in env.observation_space],
+                [acsp.shape[0] for acsp in env.action_space],
+                is_mamujoco=True,
+                state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
+            )
+    elif args.env_id in ['simple_spread']:   # 'simple_tag', 'simple_world'
+        replay_buffer = ReplayBuffer(
             args.buffer_length, agent_num,
-            [env_info['obs_shape'] for _ in env.observation_space],
-            [acsp.shape[0] for acsp in env.action_space],
-            is_mamujoco=True,
-            state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
+            each_state_shape,
+            [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
         )
+
     replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
+
+
+    # replay_buffer = ReplayBuffer(
+    #         args.buffer_length, agent_num,
+    #         [env_info['obs_shape'] for _ in env.observation_space],
+    #         [acsp.shape[0] for acsp in env.action_space],
+    #         is_mamujoco=True,
+    #         state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
+    #     )
+    # replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
 
     """ Train Log Dir """
     tb_log_path = os.path.join("./logs_SRPO_critic_pretrain", "{}_{}_{}_seed{}_buffer{}_{}".format(str(args.env_id), args.data_type, args.srpo_mode, args.seed, args.buffer_length, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")) )
@@ -245,12 +294,11 @@ def pretrain_critic_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")
+    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
     parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     parser.add_argument("--device", default=1, type=int, help='cuda number')
     parser.add_argument("--srpo_mode", default='IND', type=str)
     # params for networks
@@ -260,22 +308,23 @@ def pretrain_critic_args():
 
 
     parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
-
+    parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     # params for buffer and data
     parser.add_argument("--buffer_length", default=int(1e6), type=int)
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
+    # continuous MPE default False
+    parser.add_argument("--discrete_action", action='store_true', default=False)
 
     config = parser.parse_args()
 
     config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
-
     # combine dir
-    if config.env_id == 'HalfCheetah-v2':
+    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
         config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
     else:
         config.dataset_dir = config.dataset_dir + '/' + config.env_id
-    # config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
+
 
     if config.use_gpu:
         config.device = f"cuda:{config.device}"

@@ -1,6 +1,6 @@
 #!/bin/sh
-seeds=(42 100)
-datatypes=("medium" "medium-replay")  # "expert" "random"
+seeds=(42)   #  100
+datatypes=("medium-replay" )  # "expert" "random" "medium-replay"
 datanums=0    # 1 2 3
 
 ## algo seletion
@@ -8,6 +8,7 @@ difftype="SRPO"     # DQL
 marltype="SEQ"      # JAL, VD, SEQ
 TASK="HalfCheetah-v2"
 device=1
+beta=0.04
 
 
 for i in "${seeds[@]}"
@@ -21,7 +22,7 @@ do
         for num in "${datanums[@]}"
         do
             echo "seed: $i, datatypes: $types, data number: $num"
-            python main.py --env_id $TASK --data_type $types --dataset_num $num --seed $i --device $device --difftype $difftype --marltype $marltype --critic_load_path $critic_load_path --diffusion_load_path $diffusion_load_path
+            python main.py --env_id $TASK --data_type $types --dataset_num $num --seed $i --device $device --difftype $difftype --marltype $marltype --critic_load_path $critic_load_path --diffusion_load_path $diffusion_load_path --beta $beta
         done
     done
 done

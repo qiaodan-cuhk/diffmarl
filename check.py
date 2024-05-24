@@ -1,8 +1,15 @@
+# This is the file to check the pretrained models of IND & JAL
+# 1. the difference between JAL partial score and IND score
+# 2. bandit dataset, print learned gradients and distributions, visualize the KL constraint
+# 3. eval the critic, IND works, CTDE works, JAL doesn't work. Maybe JAL score is wrong???
+
+
 # Diffusion-QL Copyright 2022 Twitter, Inc and Zhendong Wang.
 # Framework copyright. CFCQL and OMAR
 
 # Algorithm: JAL_DQ, ind_DQ, ind_SRPO, JAL_SRPO, CTDE_SRPO
 # ToDO Algo: QMIX_SRPO
+
 import os, sys, tempfile
 import json
 import argparse
@@ -32,12 +39,7 @@ from bandit import ContinuousBanditEnv
 from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
 from algorithms.MASRPO import IND_SRPO, JAL_SRPO, CTDE_SRPO, SEQ_SRPO     # VD_SRPO, CTDE_SRPO
 
-
-import wandb
-
-
-
-
+import matplotlib.pyplot as plt
 
 
 # make parallel MA-Env
@@ -164,19 +166,13 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
     # IND & CTDE load ind diffusion score, JAL load joint diffusion score
     if load_path is not None:
         print("loading actor...")
-        if srpo_type == 'IND' or srpo_type == 'CTDE':
+        if srpo_type == 'IND' or srpo_type == 'CTDE' or srpo_type == 'SEQ':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
                 # SRPO_premodels/exp_seed/IND/best_diffusion_i.pth
                 load_path_i = os.path.join(load_path, 'IND', f'best_diffusion_{agent_index}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 # for k,v in ckpt.items():
                 #     print("{} ckpt: {}, srpo: {}".format(k, ckpt[k].shape, srpo_i.state_dict()[k].shape))
-                srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
-        elif srpo_type == 'SEQ':
-            for agent_index, srpo_i in enumerate(srpo_model.agents):
-                # SRPO_premodels/exp_seed/Seq/best_diffusion_i.pth
-                load_path_i = os.path.join(load_path, 'Seq', f'best_diffusion_{agent_index}.pth')
-                ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
             # SRPO_premodels/exp_seed/ + JAL/diffusion.pth
@@ -188,7 +184,205 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
         assert False
 
 
-def offline_train(config):
+
+def save_a_traj(action, a0_traj, a1_traj, marltype):
+    if marltype == 'JAL':
+        a0 = action[:, 0].mean().cpu()
+        a1 = action[:, 1].mean().cpu()
+        a0_d = a0.detach().numpy()
+        a1_d = a1.detach().numpy()
+        a0_traj.append(a0_d)
+        a1_traj.append(a1_d)
+    else:
+        a0 = action[0].mean().cpu()
+        a1 = action[1].mean().cpu()
+        a0_d = a0.detach().numpy()
+        a1_d = a1.detach().numpy()
+        a0_traj.append(a0_d)
+        a1_traj.append(a1_d)
+
+# 可视化所有score和q gradient
+def vis_pretrain_score(marltype, ma_agent, replay_buffer, gpu_use):
+    # 定义空间范围
+    x = np.linspace(-1, 1, 11)
+    y = np.linspace(-1, 1, 11)
+    X, Y = np.meshgrid(x, y)
+ 
+    s0 = replay_buffer.sample(x.shape[0], to_gpu=gpu_use)[0]['obs']  # TBD
+    s1 = replay_buffer.sample(x.shape[0], to_gpu=gpu_use)[0]['obs']  # TBD
+
+    for agent in ma_agent.agents:
+        agent.diffusion_behavior.eval()
+
+    fig, ax = plt.subplots()
+    ax.set_title('Pretrain Models')
+    ax.set_xlabel('X Axis')
+    ax.set_ylabel('Y Axis')
+
+    ax.set_xlim([-1.2, 1.2])
+    ax.set_ylim([-1.2, 1.2])
+
+    ma_agent.agents[0] = ma_agent.agents[0].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+    ma_agent.agents[1] = ma_agent.agents[1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+
+
+    if marltype == 'IND':
+        # ind Q and ind score
+        a0 = torch.from_numpy(x).to(s0.device)   # 11,1
+        a1 = torch.from_numpy(y).to(s1.device)
+        t = torch.zeros(a0.shape[0], device=s0.device) * 0.96 + 0.02  # t约等于0
+        # random noising time t
+        alpha_t, std = ma_agent.agents[0].marginal_prob_std(t)
+        z = torch.randn_like(a0)
+
+        perturbed_a0 = a0 * alpha_t[..., None] + z * std[..., None]   
+        perturbed_a1 = a1 * alpha_t[..., None] + z * std[..., None]   
+        # add noise to policy action, generate a_t
+
+        with torch.no_grad():
+            episilon0 = ma_agent.agents[0].diffusion_behavior(perturbed_a0, t, s0).detach()  # diffusion model prediction\
+            episilon1 = ma_agent.agents[1].diffusion_behavior(perturbed_a1, t, s1).detach()  # diffusion model prediction
+
+        detach_a0 = a0.detach().requires_grad_(True)  # dilac policy detach
+        detach_a1 = a1.detach().requires_grad_(True)  # dilac policy detach
+        qs0 = ma_agent.agents[0].q[0].q0_target.both(detach_a0 , s0)  # Q1(s, a) 
+        q0 = (qs0[0].squeeze() + qs0[1].squeeze()) / 2.0
+        qs1 = ma_agent.agents[1].q[0].q0_target.both(detach_a1 , s1)  # Q2(s, a) 
+        q1 = (qs1[0].squeeze() + qs1[1].squeeze()) / 2.0
+
+
+        guidance0 =  torch.autograd.grad(torch.sum(q0), detach_a0)[0].detach()
+        guidance1 =  torch.autograd.grad(torch.sum(q1), detach_a1)[0].detach()
+
+        ax.quiver(X, Y, episilon0, episilon1, color='red', label='IND Score')
+        ax.quiver(X, Y, guidance0, guidance1, color='blue', label='IND Q Gradients')
+
+
+    # elif marltype == 'CTDE':
+    #     # JAL Q and ind score
+
+    #     a0 = x   # 11,1
+    #     a1 = y
+    #     t = torch.zeros(a0.shape[0], device=s.device) * 0.96 + 0.02  # t约等于0
+    #     # random noising time t
+    #     alpha_t, std = ma_agent[0].marginal_prob_std(t)
+    #     z = torch.randn_like(a0)
+
+    #     perturbed_a0 = a0 * alpha_t[..., None] + z * std[..., None]   
+    #     perturbed_a1 = a1 * alpha_t[..., None] + z * std[..., None]   
+    #     # add noise to policy action, generate a_t
+
+    #     with torch.no_grad():
+    #         episilon0 = ma_agent[0].diffusion_behavior(perturbed_a0, t, s).detach()  # diffusion model prediction\
+    #         episilon1 = ma_agent[1].diffusion_behavior(perturbed_a1, t, s).detach()  # diffusion model prediction
+
+    #     detach_a0 = a0.detach().requires_grad_(True)  # dilac policy detach
+    #     detach_a1 = a1.detach().requires_grad_(True)  # dilac policy detach
+    #     qs0 = ma_agent[0].q[0].q0_target.both(detach_a0 , s)  # Q1(s, a) 
+    #     q0 = (qs0[0].squeeze() + qs0[1].squeeze()) / 2.0
+    #     qs1 = ma_agent[1].q[0].q0_target.both(detach_a1 , s)  # Q2(s, a) 
+    #     q1 = (qs1[0].squeeze() + qs1[1].squeeze()) / 2.0
+
+
+    #     guidance0 =  torch.autograd.grad(torch.sum(q0), detach_a0)[0].detach()
+    #     guidance1 =  torch.autograd.grad(torch.sum(q1), detach_a1)[0].detach()
+
+    #     ax.quiver(X, Y, episilon0, episilon1, color='red', label='IND Score')
+    #     ax.quiver(X, Y, guidance0, guidance1, color='blue', label='IND Q Gradients')
+
+
+    # elif marltype == 'JAL':
+    #     # JAL Q and JAL score
+    #     # ind Q and ind score
+    #     a0 = x   # 11,1
+    #     a1 = y
+    #     t = torch.zeros(a0.shape[0], device=s.device) * 0.96 + 0.02  # t约等于0
+    #     # random noising time t
+    #     alpha_t, std = ma_agent[0].marginal_prob_std(t)
+    #     z = torch.randn_like(a0)
+
+    #     perturbed_a0 = a0 * alpha_t[..., None] + z * std[..., None]   
+    #     perturbed_a1 = a1 * alpha_t[..., None] + z * std[..., None]   
+    #     # add noise to policy action, generate a_t
+
+    #     with torch.no_grad():
+    #         episilon0 = ma_agent[0].diffusion_behavior(perturbed_a0, t, s).detach()  # diffusion model prediction\
+    #         episilon1 = ma_agent[1].diffusion_behavior(perturbed_a1, t, s).detach()  # diffusion model prediction
+
+    #     detach_a0 = a0.detach().requires_grad_(True)  # dilac policy detach
+    #     detach_a1 = a1.detach().requires_grad_(True)  # dilac policy detach
+    #     qs0 = ma_agent[0].q[0].q0_target.both(detach_a0 , s)  # Q1(s, a) 
+    #     q0 = (qs0[0].squeeze() + qs0[1].squeeze()) / 2.0
+    #     qs1 = ma_agent[1].q[0].q0_target.both(detach_a1 , s)  # Q2(s, a) 
+    #     q1 = (qs1[0].squeeze() + qs1[1].squeeze()) / 2.0
+
+
+    #     guidance0 =  torch.autograd.grad(torch.sum(q0), detach_a0)[0].detach()
+    #     guidance1 =  torch.autograd.grad(torch.sum(q1), detach_a1)[0].detach()
+
+    #     ax.quiver(X, Y, episilon0, episilon1, color='red', label='IND Score')
+    #     ax.quiver(X, Y, guidance0, guidance1, color='blue', label='IND Q Gradients')
+
+    ax.legend(loc='upper left')
+
+
+    # 显示图形
+    dir = '/home/qiaodan/Code/diffmarl/eval_result'
+    plt.savefig(os.path.join(dir, '{}_pretrain_models.png'.format(marltype)), dpi=300, format='png', bbox_inches='tight', pad_inches=0.1)
+    plt.show()
+
+
+
+# 可视化IND与JAL在bandit上的policy轨迹
+def vis_train_grad(epi, q_grad, action, figure, beta, marltype, t):
+    if marltype == 'JAL':
+        epi0 = epi[:, 0].mean().cpu()
+        epi1 = epi[:, 0].mean().cpu()
+        q_grad0 = q_grad[:, 0].mean().cpu()
+        q_grad1 = q_grad[:, 0].mean().cpu()
+        epi0_d = epi0.detach().numpy()
+        epi1_d = epi1.detach().numpy()
+        q_grad0_d = beta*q_grad0.detach().numpy()
+        q_grad1_d = beta*q_grad1.detach().numpy()
+        a0 = action[:, 0].mean().cpu()
+        a1 = action[:, 1].mean().cpu()
+        a0_d = a0.detach().numpy()
+        a1_d = a1.detach().numpy()
+    else:
+        epi0 = epi[0].mean().cpu()
+        epi1 = epi[1].mean().cpu()
+        q_grad0 = q_grad[0].mean().cpu()
+        q_grad1 = q_grad[1].mean().cpu()
+        epi0_d = beta*epi0.detach().numpy()
+        epi1_d = beta*epi1.detach().numpy()
+        q_grad0_d = q_grad0.detach().numpy()
+        q_grad1_d = q_grad1.detach().numpy()
+        a0 = action[0].mean().cpu()
+        a1 = action[1].mean().cpu()
+        a0_d = a0.detach().numpy()
+        a1_d = a1.detach().numpy()
+
+    # 绘制箭头图
+    # plt.figure(figsize=(8, 8))
+    figure.quiver(a0_d, a1_d, epi0_d, epi1_d, color='red', label='Score Time {}'.format(t))
+    figure.quiver(a0_d, a1_d, q_grad0_d, q_grad1_d, color='blue', label='Q Gradients Time {}'.format(t))
+    # figure.scatter(a0_d, a1_d, c='black', label='Actions', s=3)
+
+
+    
+
+
+
+
+    
+
+
+
+# # visualize distribution
+# def vis_dist():
+
+
+def offline_eval(config):
     unique_token = "{}__{}__{}__seed{}".format(config.env_id, config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
 
     unique_token = config.marltype+"_"+unique_token
@@ -283,11 +477,6 @@ def offline_train(config):
     else:
         print("Neither SRPO nor Diffusion-QL have been selected. Choose valid diffusion model")
              
-    # score 提取直接load joint diffusion，先生成联合动作然后denoise得到联合score，然后分别取两个分量给每个agent用作epsilon
-    # sequential score 是独立的diffusion, 第一个人3维度action，6维度条件；第二个人3维度action，6+3维度condition，
-    # 提取score的时候第一个人先denoise得到score，然后基于这个第一个人的采样动作结合state给到第二个人去denoise得到score
-
-
     # load pretrained critics and diffusion to SRPO
     if config.critic_load_path is not None:
         load_SRPO_critic(srpo_model=ma_agent, load_path=config.critic_load_path, srpo_type=config.marltype)
@@ -325,9 +514,12 @@ def offline_train(config):
         )
     replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
 
-    if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale
+    if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale, 主要用于MPE
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
     print('Average_reward:', replay_buffer.ave_reward)
+
+    # visualize pretrain models
+    # vis_pretrain_score(config.marltype, ma_agent, replay_buffer, config.use_gpu)
 
     # tensorboard log dir and save configurations
     if not config.no_log:
@@ -350,18 +542,24 @@ def offline_train(config):
         param_dict = os.path.join(outdir, 'config.json')
         with open(param_dict, 'w') as f:
             json.dump(config_log_dict, f)
-    
-    run = wandb.init(
-    # set the wandb project where this run will be logged
-    project="MASRPO",
-    # track hyperparameters and run metadata
-    config=config_log_dict)
 
 
     # training process
     ma_agent.prep_training(device=config.device)
 
     progress_bar = tqdm(range(config.num_steps+1), desc = 'Training Process', leave=True)
+
+    a0_traj = []
+    a1_traj = []
+    fig, ax = plt.subplots(figsize=(8, 8))
+    # 添加标题和轴标签
+    ax.set_title('Quiver Gradient and Score Plot')
+    ax.set_xlabel('action 1')
+    ax.set_ylabel('action 2')
+    
+
+    ax.set_xlim([-1.2, 1.2])
+    ax.set_ylim([-1.2, 1.2])
 
     for t in range(config.num_steps + 1):
         # set as eval() when eval
@@ -372,31 +570,54 @@ def offline_train(config):
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t)
-                run.log({"eval_return": eval_return, "normed_eval_return": eval_return/replay_buffer.ave_reward})
             # when eval finished, switch to train()
             ma_agent.prep_training(device=config.device)
                 
         # load joint datasets for JAL and indpendent trajectory for ind/seq training
         if config.marltype == "JAL":
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
-            ma_agent.update(sample, t, run)  
+            epi, q_grad, a_plt = ma_agent.update(sample, t)  
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
         elif config.marltype == "IND":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'bandit'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
+
+            if config.env_id == 'bandit':
+                epi = []
+                q_grad = []
+                a_plt = []
+                
             # 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
                 sample_i = samples[a_i]
-                ma_agent.update(sample_i, a_i, t, run)
+                epi_i, q_grad_i, a_plt_i = ma_agent.update(sample_i, a_i, t)
+                epi.append(epi_i)
+                q_grad.append(q_grad_i)  
+                a_plt.append(a_plt_i)    
+
         elif config.marltype == "CTDE" or config.marltype == "SEQ":
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，以及other policy actions
             # 一起输入给进去再分开，更新体现在ma agent内部
-            ma_agent.update(samples, t, run)
+            epi, q_grad, a_plt = ma_agent.update(samples, t)
         else:  # QMIX_SRPO
             pass
-            
+        
+        save_a_traj(a_plt, a0_traj, a1_traj, config.marltype)
+
+        if t % config.print_interval == 0 or t == config.num_steps:
+            # visualize gradient
+            print('Print Gradients Fields | Timestep:{}'.format(t))
+            vis_train_grad(epi, q_grad, a_plt, ax, config.beta, config.marltype, t)
+                
         progress_bar.update(1)
+
+    
+    ax.plot(a0_traj, a1_traj,  linestyle='--', c='black', label='Actions')
+    ax.legend(['Actions', 'Score Time 0', 'Q Gradients Time 0'], loc='upper left')
+
+    dir = '/home/qiaodan/Code/diffmarl/eval_result'
+    plt.savefig(os.path.join(dir, '{}_beta{}_seed{}_traj.png'.format(config.marltype, config.beta, config.seed)), dpi=300, format='png', bbox_inches='tight', pad_inches=0.1)
 
     try:
         env.close()
@@ -407,7 +628,7 @@ def offline_train(config):
         
 temperature_coefficients = {"simple_spread": 0.08,
                             "HalfCheetah-v2": 0.02,
-                            "bandit": 0.02}
+                            "bandit": 0.1}
 # change into MARL version
 
 if __name__ == '__main__':
@@ -415,14 +636,14 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--env_id", default='bandit', type=str, help="Name of environment")   # HalfCheetah-v2
     parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
-    parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ
+    parser.add_argument("--marltype", default='JAL') # JAL, IND, CTDE, SEQ, QMIX
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
@@ -431,10 +652,9 @@ if __name__ == '__main__':
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     parser.add_argument("--device", default=0, type=int, help='cuda number')
 
-
     """   Unchangeable Params   """
     # log and save dir
-    parser.add_argument("--dir", type=str, default='/home/qiaodan/Code/diffmarl/results', help="tensorboard log directory")
+    parser.add_argument("--dir", type=str, default='/home/qiaodan/Code/diffmarl/eval_result', help="tensorboard log directory")
     parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
 
     # params for MPE envs
@@ -463,14 +683,15 @@ if __name__ == '__main__':
 
     # params for logging
     parser.add_argument("--logging_interval", default=500, type=int)
+    parser.add_argument("--print_interval", default=50, type=int)
     parser.add_argument("--no_log", action='store_true')
 
     ######### args for SRPO To be revise #########
 
     # regularization para
     parser.add_argument('--beta', type=float, default=None)  
-    parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2_expert')  # HalfCheetah-v2_expert
-    parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2_expert') # HalfCheetah-v2_expert
+    parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/bandit')  # HalfCheetah-v2_expert
+    parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/bandit') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
     # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
@@ -519,7 +740,7 @@ if __name__ == '__main__':
         if config.env_id == 'simple_world':
             config.steps_per_update=20
     elif config.env_id == 'bandit':
-        config.num_steps = int(3e3)
+        config.num_steps = int(1e3)
         config.steps_per_update = 10 # 也没用
         config.eval_interval = 100
         config.logging_interval = 100
@@ -550,7 +771,5 @@ if __name__ == '__main__':
     else:        
         config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
         
-
-    
-    offline_train(config)
+    offline_eval(config)
 

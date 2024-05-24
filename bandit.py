@@ -19,7 +19,7 @@ class ContinuousBanditEnv(gym.Env):
 
     def step(self, action):
         assert len(action) == int(2)
-        reward = action[0]*action[1]
+        reward = action[0].item()*action[1].item()
         rewards = np.array(reward).item()
         done = True
         next_state = np.array([1., 1., 1., 1., 1.])
