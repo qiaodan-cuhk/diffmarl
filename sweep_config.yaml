@@ -1,0 +1,13 @@
+program: diffmarl/main.py
+
+method: random  # 选择超参数采样方法
+
+metric:
+  name: eval_return
+  goal: maximize
+
+parameters:
+  beta:
+    distribution: uniform
+    min: 0.001
+    max: 0.5

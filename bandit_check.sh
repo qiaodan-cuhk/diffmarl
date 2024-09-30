@@ -1,28 +1,27 @@
 #!/bin/sh
-seeds=(100 37 888)
-datatypes=("expert")  # "expert" "random" "medium" "medium-replay"
+seeds=(44)
+datatypes=("random")  # "expert" "random" "medium" "medium-replay"
 datanums=0    # 1 2 3
-beta=(0.001 0.002 0.005 0.01)
+beta=1  # (0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 
 ## algo seletion
 difftype="SRPO"     # DQL
-marltype="IND"      # JAL, VD, SEQ
-TASK="HalfCheetah-v2"
-device=0
+marltype=("IND" "CTDE" "SEQ")      # JAL, VD, SEQ
+TASK="bandit"
+device=1
 
-
-for i in "${seeds[@]}"
+for beta_i in "${beta[@]}"
 do
-    for types in "${datatypes[@]}"
+    for i in "${seeds[@]}"
     do
         # actor/critic load path
-        critic_load_path="/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2"
-        diffusion_load_path="/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2"
+        critic_load_path="/home/qiaodan/Code/diffmarl/SRPO_premodels/bandit"
+        diffusion_load_path="/home/qiaodan/Code/diffmarl/SRPO_premodels/bandit"
 
-        for num in "${datanums[@]}"
+        for marl in "${marltype[@]}"
         do
             echo "seed: $i, datatypes: $types, data number: $num"
-            python main.py --env_id $TASK --data_type $types --dataset_num $num --seed $i --device $device --difftype $difftype --marltype $marltype --critic_load_path $critic_load_path --diffusion_load_path $diffusion_load_path --beta $beta
+            python check.py --marltype $marl --beta $beta --seed $i --init_action -0.7 0.3
         done
     done
 done

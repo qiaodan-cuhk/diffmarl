@@ -347,7 +347,23 @@ class MASRPO_IQL(nn.Module):
         adv = target_q - v
         temp = 10.0 if "maze" in self.args.env_id else 3.0
         exp_adv = torch.exp(temp * adv.detach()).clamp(max=100.0)
-        # e^( 10* (Q-V) )
+        # 这里与标准的IQL实现类似，都采用了100来max clamp
+        # 本来是用于 train actor 的
+        """   IQL 的原始实现
+        exp_a = jnp.exp((q - v) * agent.temperature)
+        exp_a = jnp.minimum(exp_a, 100.0)
+
+        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            dist = agent.actor.apply_fn(
+                {"params": actor_params}, batch["observations"], training=True
+            )
+
+            log_probs = dist.log_prob(batch["actions"])
+            actor_loss = -(exp_a * log_probs).mean()
+
+            return actor_loss, {"actor_loss": actor_loss, "adv": q - v}        
+        """
+        
 
         policy_out = self.deter_policy(s)
         bc_losses = torch.sum((policy_out - a)**2, dim=1)   # pi(a|s) - a_data

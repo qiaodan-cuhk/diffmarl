@@ -32,13 +32,7 @@ from bandit import ContinuousBanditEnv
 from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
 from algorithms.MASRPO import IND_SRPO, JAL_SRPO, CTDE_SRPO, SEQ_SRPO     # VD_SRPO, CTDE_SRPO
 
-
 import wandb
-
-
-
-
-
 
 # make parallel MA-Env
 def make_parallel_env(env_id, seed, discrete_action):
@@ -136,13 +130,16 @@ def log_and_print(key, value, t, multi=False):
         log_value(key, value, t)
 
 
-def load_SRPO_critic(srpo_model, load_path, srpo_type):
+def load_SRPO_critic(srpo_model, load_path, srpo_type, epoch_num):
     if load_path is not None:
         print("loading critic...")
         if srpo_type == 'IND':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
                 # SRPO_premodels/exp_seed/IND/best_critic_i
-                load_path_i = os.path.join(load_path, 'IND', f'best_critic_{agent_index}.pth')
+                if epoch_num == 'best':
+                    load_path_i = os.path.join(load_path, 'IND', f'best_critic_{agent_index}.pth')
+                else:
+                    load_path_i = os.path.join(load_path, 'IND', f'critic_{agent_index}_epoch{epoch_num}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.q[0].load_state_dict(ckpt)
         elif srpo_type == 'JAL':
@@ -153,21 +150,27 @@ def load_SRPO_critic(srpo_model, load_path, srpo_type):
         elif srpo_type == 'CTDE' or srpo_type == 'SEQ':
             for srpo_i in srpo_model.agents:
                 # SRPO_premodels/exp_seed/JAL/best_critic  每个agent都有一个central Q，共享
-                load_path_i = os.path.join(load_path, 'JAL', f'best_critic.pth')
+                if epoch_num == 'best':
+                    load_path_i = os.path.join(load_path, 'JAL', f'best_critic.pth')
+                else:
+                    load_path_i = os.path.join(load_path, 'JAL', f'critic_epoch{epoch_num}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.q[0].load_state_dict(ckpt)
 
     else:
         assert False
 
-def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
+def load_SRPO_diffusion(srpo_model, load_path, srpo_type, epoch_num):
     # IND & CTDE load ind diffusion score, JAL load joint diffusion score
     if load_path is not None:
         print("loading actor...")
         if srpo_type == 'IND' or srpo_type == 'CTDE':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
                 # SRPO_premodels/exp_seed/IND/best_diffusion_i.pth
-                load_path_i = os.path.join(load_path, 'IND', f'best_diffusion_{agent_index}.pth')
+                if epoch_num == 'best':
+                    load_path_i = os.path.join(load_path, 'IND', f'best_diffusion_{agent_index}.pth')
+                else:
+                    load_path_i = os.path.join(load_path, 'IND', f'diffusion_{agent_index}_epoch{epoch_num}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 # for k,v in ckpt.items():
                 #     print("{} ckpt: {}, srpo: {}".format(k, ckpt[k].shape, srpo_i.state_dict()[k].shape))
@@ -175,7 +178,10 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
         elif srpo_type == 'SEQ':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
                 # SRPO_premodels/exp_seed/Seq/best_diffusion_i.pth
-                load_path_i = os.path.join(load_path, 'Seq', f'best_diffusion_{agent_index}.pth')
+                if epoch_num == 'best':
+                    load_path_i = os.path.join(load_path, 'Seq', f'best_diffusion_{agent_index}.pth')
+                else:
+                    load_path_i = os.path.join(load_path, 'Seq', f'diffusion_{agent_index}_epoch{epoch_num}.pth')    
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
@@ -207,6 +213,19 @@ def offline_train(config):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+
+    run = wandb.init(
+    # set the wandb project where this run will be logged
+    project="MASRPO_{}".format(config.marltype),
+    name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
+    # track hyperparameters and run metadata
+    config=config)
+
+    config.beta = wandb.config.beta
+    config.diff_epoch = wandb.config.diff_epoch
+    config.critic_epoch = wandb.config.critic_epoch
+
+    
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
         env = make_parallel_env(config.env_id, config.seed, config.discrete_action)
         env_args, env_info = None, None
@@ -290,13 +309,13 @@ def offline_train(config):
 
     # load pretrained critics and diffusion to SRPO
     if config.critic_load_path is not None:
-        load_SRPO_critic(srpo_model=ma_agent, load_path=config.critic_load_path, srpo_type=config.marltype)
+        load_SRPO_critic(srpo_model=ma_agent, load_path=config.critic_load_path, srpo_type=config.marltype, epoch_num=config.critic_epoch)
         print('Critic models are loaded to SRPO')
     else:
         print('Critic models are not loaded to SRPO')
 
     if config.diffusion_load_path is not None:
-        load_SRPO_diffusion(srpo_model=ma_agent, load_path=config.diffusion_load_path, srpo_type=config.marltype)
+        load_SRPO_diffusion(srpo_model=ma_agent, load_path=config.diffusion_load_path, srpo_type=config.marltype, epoch_num=config.diff_epoch)
         print('Diffusion models are loaded to SRPO')
     else:
         print('Diffusion models are not loaded to SRPO')
@@ -325,7 +344,7 @@ def offline_train(config):
         )
     replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
 
-    if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale
+    if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale; 应该是主要用于MPE环境
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
     print('Average_reward:', replay_buffer.ave_reward)
 
@@ -337,7 +356,9 @@ def offline_train(config):
                            "dataset_ave_reward": replay_buffer.ave_reward,
                            "algo": algo_name,
                            "seed": config.seed,
-                           "reg beta": config.beta,
+                           "beta": config.beta,
+                           "Diffusion Epoch":config.diff_epoch,
+                           "Critic Epoch":config.critic_epoch,
                            "Denoise_steps": config.T,
                            "batch size": config.batch_size,
                            "discount factor": config.gamma,
@@ -348,14 +369,17 @@ def offline_train(config):
                            }
         print(config_log_dict)
         param_dict = os.path.join(outdir, 'config.json')
+
+        json_str = json.dumps(config_log_dict, separators=(',', ':'))
+        json_str = json_str.replace(',', ',\n')
+        # 最后，写入文件
         with open(param_dict, 'w') as f:
-            json.dump(config_log_dict, f)
+            f.write(json_str)
+
+        # with open(param_dict, 'w') as f:
+        #     json.dump(config_log_dict, f, indent=None, separators=(',', ': '))
     
-    run = wandb.init(
-    # set the wandb project where this run will be logged
-    project="MASRPO",
-    # track hyperparameters and run metadata
-    config=config_log_dict)
+    
 
 
     # training process
@@ -410,26 +434,43 @@ temperature_coefficients = {"simple_spread": 0.08,
                             "bandit": 0.02}
 # change into MARL version
 
+# sweep_config = {
+#     'method': 'random',  # 定义搜索方法，可以是 'grid' 或 'random'
+#     'metric': {
+#     'name': 'eval_return',
+#     'goal': 'maximize'
+#     },
+#     'parameters': {
+#         'diff_epoch': [49, 99, 149, 199],  # 指定 diff_epoch 的候选值
+#         'critic_epoch': [19, 39, 59, 79, 99, 119, 139, 159, 179, 199],  # 指定 critic_epoch 的候选值
+#         'beta': [0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 1.0]  # 指定 beta 的候选值
+#     }
+# }
+
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
     parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
-    parser.add_argument("--data_type", default='expert', type=str)
+    parser.add_argument("--data_type", default='medium', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
     parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ
+    parser.add_argument("--diff_epoch", default='best')  # 49,99,149
+    parser.add_argument("--critic_epoch", default='best')  # 19,39,59,79,99,119,139,159,179,199
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
     parser.add_argument("--beta_schedule", default='vp', type=str)
-    parser.add_argument("--seed", default=100, type=int, help="Random seed")
+    parser.add_argument("--seed", default=37, type=int, help="Random seed")
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    parser.add_argument("--device", default=0, type=int, help='cuda number')
+    parser.add_argument("--device", default=1, type=int, help='cuda number')
 
 
     """   Unchangeable Params   """
@@ -468,9 +509,9 @@ if __name__ == '__main__':
     ######### args for SRPO To be revise #########
 
     # regularization para
-    parser.add_argument('--beta', type=float, default=None)  
-    parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2_expert')  # HalfCheetah-v2_expert
-    parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2_expert') # HalfCheetah-v2_expert
+    parser.add_argument('--beta', type=float, default=0.2)  
+    parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2')  # HalfCheetah-v2_expert
+    parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
     # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
@@ -487,14 +528,9 @@ if __name__ == '__main__':
     # Dilac Policy layers, maze = 4, else = 2
     parser.add_argument('--policy_layer', type=int, default=None) 
     parser.add_argument('--regq', type=int, default=0)
-    # didn't find z noise    
-    # parser.add_argument('--z_noise', type=int, default=1)
-    # not find
-    # parser.add_argument('--critic_load_epochs', type=int, default=150)
-    # regularized q gradients
-    
     ##################################################
 
+    
     config = parser.parse_args()
 
     # config.env 替换为 config.env_id
@@ -511,6 +547,12 @@ if __name__ == '__main__':
         config.device = f"cuda:{config.device}"
     else:
         config.device = "cpu"
+    
+    # dataset premodel path
+    if config.env_id == 'HalfCheetah-v2':
+        config.critic_load_path = config.critic_load_path + '_{}'.format(config.data_type)
+        config.diffusion_load_path = config.diffusion_load_path + '_{}'.format(config.data_type)
+
 
     # make envs params
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
@@ -549,8 +591,18 @@ if __name__ == '__main__':
         config.dataset_dir = config.dataset_dir + '/' + config.env_id
     else:        
         config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
-        
+
+    offline_train(config) 
 
     
-    offline_train(config)
+    # 使用 sweep_config 创建一个 sweep
+    # sweep_id = wandb.sweep(sweep_config, project="HalfCheetah_{}".format(config.data_type))
+
+    # config.beta = sweep_id.config.beta
+
+    # # 使用 sweep_id 启动 sweep 的执行，并传入 train_with_config 函数
+    # wandb.agent(sweep_id,  offline_train, count=10)
+
+
+    
 

@@ -3,6 +3,8 @@
 # 2. bandit dataset, print learned gradients and distributions, visualize the KL constraint
 # 3. eval the critic, IND works, CTDE works, JAL doesn't work. Maybe JAL score is wrong???
 
+"""用来绘制bandit的梯度场"""
+
 
 # Diffusion-QL Copyright 2022 Twitter, Inc and Zhendong Wang.
 # Framework copyright. CFCQL and OMAR
@@ -40,6 +42,8 @@ from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
 from algorithms.MASRPO import IND_SRPO, JAL_SRPO, CTDE_SRPO, SEQ_SRPO     # VD_SRPO, CTDE_SRPO
 
 import matplotlib.pyplot as plt
+
+import wandb
 
 
 # make parallel MA-Env
@@ -123,6 +127,92 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
 
         avg_predator_return /= eval_episodes
         return avg_predator_return
+    
+
+# evaluate policy in eval module with envs(seed+100) on cpu
+def eval_init_dilac_policy(agent, env_name, seed, eval_episodes, discrete_action, init_policy, device='cpu', env_args=None):
+    if env_name in ['HalfCheetah-v2']:
+        env = MujocoMulti(env_args=env_args)
+        env.seed(seed + 100)
+        all_episodes_rewards = []
+        for ep_i in range(eval_episodes):
+            agent.prep_rollouts(device=device)  # 转成 eval 模式
+            env.reset()
+            done = False
+            episode_reward = 0.
+            while not done:
+                obs = env.get_obs()
+                # torch_obs = [Variable(torch.Tensor(obs[i]).unsqueeze(0), requires_grad=False) for i in range(agent.nagents)] 
+                torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(device)  for i in range(agent.nagents)] 
+                torch_agent_actions = agent.step(torch_obs, explore=False)
+                # if torch.is_tensor(torch_agent_actions):
+                if all(isinstance(item, torch.Tensor) for item in torch_agent_actions):
+                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                elif all(isinstance(item, np.ndarray) for item in torch_agent_actions):
+                    agent_actions = torch_agent_actions
+                actions = [ac.squeeze(0) for ac in agent_actions]  # 变为 list[np, np, np]
+                reward, done, info = env.step(actions)  
+                episode_reward += reward
+            all_episodes_rewards.append(episode_reward)        
+        mean_episode_reward = np.mean(np.array(all_episodes_rewards))
+        return mean_episode_reward
+    elif env_name == 'bandit':
+        env = ContinuousBanditEnv()
+        
+        agent.prep_rollouts(device=device)  # 转成 eval 模式
+        obs = env.reset()
+        done = False
+        torch_obs = [torch.Tensor(obs).unsqueeze(0).to(device)  for i in range(agent.nagents)]
+
+        # print initial policy params of 5*256*256*1
+        init_agent_actions = agent.step(torch_obs, explore=False)
+        for id, srpo_agent in enumerate(agent.agents):
+            dilac = srpo_agent.SRPO_policy
+            dilac.net[-2].bias.data[0] = init_policy[id]
+
+        torch_agent_actions = agent.step(torch_obs, explore=False)
+        actions = [ac.squeeze(0) for ac in torch_agent_actions]  # 变为 list[np, np, np]
+
+
+
+        _, reward, done, info = env.step(actions)  # 可以简单点，直接把action相乘
+
+        mean_episode_reward = np.array(reward)
+        return mean_episode_reward
+    else:
+        avg_predator_return = 0.
+        env = make_parallel_env(env_name, seed + 100, discrete_action)
+        for ep_i in range(0, eval_episodes):
+            obs = env.reset()
+            agent.prep_rollouts(device=device)
+            for et_i in range(config.episode_length):
+                obs_len = agent.nagents
+                if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
+                    obs_len += agent.num_preys
+                torch_obs = [Variable(torch.Tensor(np.vstack(obs[:, i])), requires_grad=False) for i in range(obs_len)]
+                # 把 obs_dim * n_agents 的tensor变成 [n * [obs_dim*1]] 的变量
+                torch_agent_actions = agent.step(torch_obs, explore=False)
+                if torch.is_tensor(torch_agent_actions):
+                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                else:
+                    agent_actions = torch_agent_actions
+                # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+
+                actions = [agent_actions]
+                next_obs, rewards, dones, infos = env.step(actions)
+                
+                if env_name in ['simple_tag', 'simple_world']:
+                    avg_predator_return += rewards[0][0]
+                else:
+                    avg_agent_reward = np.mean(rewards[0])
+                    avg_predator_return += avg_agent_reward
+
+                obs = next_obs
+
+        avg_predator_return /= eval_episodes
+        return avg_predator_return
+    
+
 
 
 # log params to tensorboard
@@ -166,13 +256,19 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
     # IND & CTDE load ind diffusion score, JAL load joint diffusion score
     if load_path is not None:
         print("loading actor...")
-        if srpo_type == 'IND' or srpo_type == 'CTDE' or srpo_type == 'SEQ':
+        if srpo_type == 'IND' or srpo_type == 'CTDE':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
                 # SRPO_premodels/exp_seed/IND/best_diffusion_i.pth
                 load_path_i = os.path.join(load_path, 'IND', f'best_diffusion_{agent_index}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 # for k,v in ckpt.items():
                 #     print("{} ckpt: {}, srpo: {}".format(k, ckpt[k].shape, srpo_i.state_dict()[k].shape))
+                srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
+        elif srpo_type == 'SEQ':
+            for agent_index, srpo_i in enumerate(srpo_model.agents):
+                # SRPO_premodels/exp_seed/Seq/best_diffusion_i.pth
+                load_path_i = os.path.join(load_path, 'Seq', f'best_diffusion_{agent_index}.pth')
+                ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
             # SRPO_premodels/exp_seed/ + JAL/diffusion.pth
@@ -182,7 +278,6 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type):
             srpo.diffusion_behavior.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
     else:
         assert False
-
 
 
 def save_a_traj(action, a0_traj, a1_traj, marltype):
@@ -334,6 +429,7 @@ def vis_pretrain_score(marltype, ma_agent, replay_buffer, gpu_use):
 
 
 # 可视化IND与JAL在bandit上的policy轨迹
+# loss = epi score - beta * Q gradients
 def vis_train_grad(epi, q_grad, action, figure, beta, marltype, t):
     if marltype == 'JAL':
         epi0 = epi[:, 0].mean().cpu()
@@ -543,6 +639,13 @@ def offline_eval(config):
         with open(param_dict, 'w') as f:
             json.dump(config_log_dict, f)
 
+    
+    run = wandb.init(
+    # set the wandb project where this run will be logged
+    project="MASRPO_bandit_eval",
+    # track hyperparameters and run metadata
+    config=config_log_dict)
+
 
     # training process
     ma_agent.prep_training(device=config.device)
@@ -561,7 +664,22 @@ def offline_eval(config):
     ax.set_xlim([-1.2, 1.2])
     ax.set_ylim([-1.2, 1.2])
 
+    
+
+
+
+
     for t in range(config.num_steps + 1):
+        
+        # set init dilac policy
+        if t == 0:
+            # eval_policy will set rollouts at start
+            print('Init params')
+            init_eval_return = eval_init_dilac_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, init_policy=config.init_actions, device='cpu', env_args=env_args)
+            ma_agent.prep_training(device=config.device)
+        
+
+
         # set as eval() when eval
         if t % config.eval_interval == 0 or t == config.num_steps:
             # eval_policy will set rollouts at start
@@ -576,7 +694,7 @@ def offline_eval(config):
         # load joint datasets for JAL and indpendent trajectory for ind/seq training
         if config.marltype == "JAL":
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
-            epi, q_grad, a_plt = ma_agent.update(sample, t)  
+            epi, q_grad, a_plt = ma_agent.update(sample, t, run)  
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
         elif config.marltype == "IND":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'bandit'] else ma_agent.num_predators
@@ -590,7 +708,7 @@ def offline_eval(config):
             # 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
                 sample_i = samples[a_i]
-                epi_i, q_grad_i, a_plt_i = ma_agent.update(sample_i, a_i, t)
+                epi_i, q_grad_i, a_plt_i = ma_agent.update(sample_i, a_i, t, run)
                 epi.append(epi_i)
                 q_grad.append(q_grad_i)  
                 a_plt.append(a_plt_i)    
@@ -599,7 +717,7 @@ def offline_eval(config):
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，以及other policy actions
             # 一起输入给进去再分开，更新体现在ma agent内部
-            epi, q_grad, a_plt = ma_agent.update(samples, t)
+            epi, q_grad, a_plt = ma_agent.update(samples, t, run)
         else:  # QMIX_SRPO
             pass
         
@@ -614,7 +732,7 @@ def offline_eval(config):
 
     
     ax.plot(a0_traj, a1_traj,  linestyle='--', c='black', label='Actions')
-    ax.legend(['Actions', 'Score Time 0', 'Q Gradients Time 0'], loc='upper left')
+    ax.legend(['Score', 'Q Gradients'], loc='upper left')
 
     dir = '/home/qiaodan/Code/diffmarl/eval_result'
     plt.savefig(os.path.join(dir, '{}_beta{}_seed{}_traj.png'.format(config.marltype, config.beta, config.seed)), dpi=300, format='png', bbox_inches='tight', pad_inches=0.1)
@@ -643,7 +761,8 @@ if __name__ == '__main__':
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
-    parser.add_argument("--marltype", default='JAL') # JAL, IND, CTDE, SEQ, QMIX
+    parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ, QMIX
+    parser.add_argument("--init_actions", nargs=2, type=float, default=[0.5, -0.5]) # Initial actions as a 2D vector (e.g., -0.2 0.5)
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
