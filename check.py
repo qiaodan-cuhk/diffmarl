@@ -6,12 +6,6 @@
 """用来绘制bandit的梯度场"""
 
 
-# Diffusion-QL Copyright 2022 Twitter, Inc and Zhendong Wang.
-# Framework copyright. CFCQL and OMAR
-
-# Algorithm: JAL_DQ, ind_DQ, ind_SRPO, JAL_SRPO, CTDE_SRPO
-# ToDO Algo: QMIX_SRPO
-
 import os, sys, tempfile
 import json
 import argparse
@@ -349,8 +343,8 @@ def vis_pretrain_score(marltype, ma_agent, replay_buffer, gpu_use):
         guidance0 =  torch.autograd.grad(torch.sum(q0), detach_a0)[0].detach()
         guidance1 =  torch.autograd.grad(torch.sum(q1), detach_a1)[0].detach()
 
-        ax.quiver(X, Y, episilon0, episilon1, color='red', label='IND Score')
-        ax.quiver(X, Y, guidance0, guidance1, color='blue', label='IND Q Gradients')
+        # ax.quiver(X, Y, episilon0, episilon1, color='red', label='IND Score')
+        # ax.quiver(X, Y, guidance0, guidance1, color='blue', label='IND Q Gradients')
 
 
     # elif marltype == 'CTDE':
@@ -460,8 +454,8 @@ def vis_train_grad(epi, q_grad, action, figure, beta, marltype, t):
 
     # 绘制箭头图
     # plt.figure(figsize=(8, 8))
-    figure.quiver(a0_d, a1_d, epi0_d, epi1_d, color='red', label='Score Time {}'.format(t))
-    figure.quiver(a0_d, a1_d, q_grad0_d, q_grad1_d, color='blue', label='Q Gradients Time {}'.format(t))
+    # figure.quiver(a0_d, a1_d, epi0_d, epi1_d, color='red', label='Score Time {}'.format(t))
+    # figure.quiver(a0_d, a1_d, q_grad0_d, q_grad1_d, color='blue', label='Q Gradients Time {}'.format(t))
     # figure.scatter(a0_d, a1_d, c='black', label='Actions', s=3)
 
 

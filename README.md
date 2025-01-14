@@ -21,6 +21,7 @@ and SRPO
 - v0.3 April 15, 2024. Update IND_SRPO, CTDE(SEQ)_SRPO
 - v0.4 April 30, 2024. Update new CTDE_SRPO, SEQ_SRPO, CTDE others, SEQ others. Performance bad on expert datasets.
 - v0.4 May 13, 2024. Delete algo with "others". Shortern MASRPO classes with hieration.
+- v0.5 Sep 30, 2024. Add mix_datasets.ipynb for mix datasets across multiple seeds. Add curve_plot.py for Ablation Study 1.
 
 
 TODO
@@ -127,6 +128,7 @@ diffmarl/
 - Install Guideline
     - DI-engine(https://di-engine-docs.readthedocs.io/zh-cn/latest/13_envs/mujoco.html?highlight=mujoco)
     - zhihu: old mujoco 200 (https://zhuanlan.zhihu.com/p/352304615)
+    - 或者使用gymnasium，无需安装mujoco py和dm tree: ``` pip install gymnasium[mujoco] ```
 - mujoco_py200 
 - Multi-agent MuJoCo: Please check the [multiagent_mujoco](https://github.com/schroederdewitt/multiagent_mujoco) repo for more details about the environment. You can use the copy "multiagent_mujoco" in this directory without installation directly.
 

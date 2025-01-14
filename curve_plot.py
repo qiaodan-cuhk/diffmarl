@@ -59,52 +59,90 @@ def compute_mean_std(all_steps, all_values):
     return mean_values, std_values
 
 # 定义平滑和绘图的函数
-def smooth_and_plot(mean_values, std_values, label_prefix):
+def smooth_and_plot(mean_values, std_values, label_prefix, color):
     window_size = 5  # 设置窗口大小
     mean_values_smooth = np.convolve(mean_values, np.ones(window_size)/window_size, mode='valid')
     std_values_smooth = np.convolve(std_values, np.ones(window_size)/window_size, mode='valid')
 
     # 绘制带阴影带的图
-    plt.plot(range(len(mean_values_smooth)), mean_values_smooth, label=f'{label_prefix}')
-    plt.fill_between(range(len(std_values_smooth)), 
+    steps = [5000 * i for i in range(len(mean_values_smooth))]
+    plt.plot(steps, mean_values_smooth, label=f'{label_prefix}', color=color)
+    plt.fill_between(steps, 
                      mean_values_smooth - std_values_smooth, 
                      mean_values_smooth + std_values_smooth, 
+                     color=color,
                      alpha=0.2)
+
+
+
+dtset_list = ['expert', 'mid', 'mid_rep']
+
+# 'random'
+
+keywords_list = ['SEQ', 'IND', 'CTDE']
+
+tag = 'eval_return'  # 替换为你想要读取的标签
+log_pattern_meta = "/home/qiaodan/Code/diffmarl/results/plot/Abla1/"
 
 
 def meta(dtset):
     log_pattern = log_pattern_meta + dtset  # 根据你的路径调整
 
-    plt.figure(figsize=(9, 4), dpi=300)
+    plt.figure(figsize=(9, 4), dpi=200)
+
+    
 
     for keywords in keywords_list:
         all_steps, all_values = read_and_process_data(keywords, tag, log_pattern)
         mean_values, std_values = compute_mean_std(all_steps, all_values)
-        smooth_and_plot(mean_values, std_values, keywords[0])  # 使用第一个关键词作为标签前缀
+
+        # 初始化颜色和标签
+        color_curr = 'black'  # 默认颜色
+        label_curr = 'Unknown'  # 默认标签
+        
+        if keywords == "SEQ":
+            color_curr = 'red'
+            label_curr = 'OMSD (Ours)'
+        elif keywords == "IND":
+            color_curr = 'blue'
+            label_curr = 'BRPO-IND'
+        elif keywords == "CTDE":
+            color_curr = 'green'
+            label_curr = 'BRPO-FAC'
+
+        smooth_and_plot(mean_values, std_values, label_curr, color_curr)  # 使用第一个关键词作为标签前缀
+
+    if dtset == 'expert':
+        name = 'Expert'
+        absolute_reward = 3338.68
+    elif dtset == 'mid_rep':
+        name = 'Medium Replay'
+        absolute_reward = 1568.86
+    elif dtset == 'mid':
+        name = 'Medium'
+        absolute_reward = 423.48
+    elif dtset == 'random':
+        name = 'Random'
+        absolute_reward = -282.89
+
+    plt.grid(color='gray', linestyle='--', linewidth=0.5, alpha=0.5)  
+    plt.axhline(y=absolute_reward, color='black', linestyle='-.', linewidth=1)  #  label='Absolute Average Reward in Dataset'
 
     # 添加图例和标题
-    plt.xlabel('Step')
-    plt.ylabel('Evaluation Returns')
-    plt.title('Learning Curves of MAMujoco {}'.format(dtset))
-    plt.legend()
-    plt.savefig('Ablation_1_{}.png'.format(dtset))  # 替换为你想要的文件名
+    plt.xlabel('Training Steps', fontsize=10)
+    plt.ylabel('Evaluation Returns', fontsize=10)
+    plt.title('Learning Curves of MAMujoco - {}'.format(name), fontsize=13)
+    plt.legend(loc='lower right')
+    plt.xlim(0, 1000000) 
+    plt.ylim(bottom=0)  
+
+    save_dir = '/home/qiaodan/Code/diffmarl/results/plot/Abla1'
+
+    # 创建目录（如果不存在）
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, 'Ablation_1_{}.png'.format(dtset)), dpi=200, bbox_inches='tight')
     plt.show()
 
-
-dtset_list = ['expert', 'mid', 'mid_rep']
-
-# , 'mid_rep', 'random'
-
-
-keywords_list = [
-    ['CTDE'],
-    ['JAL'],
-    ['IND'],
-    ['SEQ']
-]
-
-tag = 'eval_return'  # 替换为你想要读取的标签
-log_pattern_meta = "/home/qiaodan/Code/diffmarl/results/plot/Abla1/"
 
 for dt in dtset_list:
     meta(dt)

@@ -1,29 +1,24 @@
-#!/bin/sh
-# seeds=(42 99 1000 9999 23477)   #  100
-
-seeds=(37 100)
+#!/bin/sh   #  100
+#专门用于random dataset找ind参数
+seeds=(44)
 types="random"  # "expert" "random" "medium-replay"
 datanums=0    # 1 2 3
 
 ## algo seletion
 difftype="SRPO"     # DQL
-marltype="SEQ"      # JAL, VD, SEQ
+marltype="IND"      # JAL, VD, SEQ
 TASK="HalfCheetah-v2"
-device=1
-# beta=(0.001 0.005 0.01 0.02 0.05 0.1 0.2 0.5 1)
-
-# 0.05 - 0.25附近 for random
-
-# beta=(0.25 0.27 0.29 0.31 0.33)
-beta=(0.08 0.1 0.12 0.15)
-
+device=0
+beta=(0.15 0.17 0.19 0.21 0.23 0.25)
+# beta=(0.0005 0.07 0.15 0.3 0.7 2 3 10)
 # beta=(0.002)
+# random需要0.2附近
 
 diffusion_epoch_num=149
-critic_epoch_num=79
+critic_epoch_num=119
 
 
-trainsteps=1000000
+trainsteps=100000
 
 for i in "${seeds[@]}"
 do

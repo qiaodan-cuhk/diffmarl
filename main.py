@@ -15,7 +15,10 @@ from tqdm import tqdm
 from gym.spaces import Box, Discrete
 import torch
 from torch.autograd import Variable
-from tensorboard_logger import log_value, configure
+
+# from tensorboard_logger import log_value, configure
+from torch.utils.tensorboard import SummaryWriter
+
 
 from utils.make_env import make_env
 from utils.buffer import ReplayBuffer
@@ -118,16 +121,18 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
 
 
 # log params to tensorboard
-def log_and_print(key, value, t, multi=False):
+def log_and_print(key, value, t, writer, multi=False):
     if multi:
         print("t:", t, end=" | ")
         for i in range(len(key)):
             end = " | " if i < len(key) - 1 else "\n"
             print("{}: {:.3f}".format(key[i], value[i][0]), end=end)
-            log_value(key[i], value[i], t)    
+            # log_value(key[i], value[i], t)    
+            writer.add_scalar(key[i], value[i], t)
     else:
         print("t:{}, {}: {:.3f}".format(t, key, value))
-        log_value(key, value, t)
+        writer.add_scalar(key, value, t)
+        # log_value(key, value, t)
 
 
 def load_SRPO_critic(srpo_model, load_path, srpo_type, epoch_num):
@@ -215,11 +220,12 @@ def offline_train(config):
 
 
     run = wandb.init(
-    # set the wandb project where this run will be logged
-    project="MASRPO_{}".format(config.marltype),
-    name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
-    # track hyperparameters and run metadata
-    config=config)
+        # set the wandb project where this run will be logged
+        project="MASRPO_{}".format(config.marltype),
+        name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
+        # track hyperparameters and run metadata
+        config=config
+        )
 
     config.beta = wandb.config.beta
     config.diff_epoch = wandb.config.diff_epoch
@@ -350,7 +356,8 @@ def offline_train(config):
 
     # tensorboard log dir and save configurations
     if not config.no_log:
-        configure(outdir)
+        # configure(outdir)
+        writer = SummaryWriter(outdir)
         config_log_dict = {"env": config.env_id,
                            "dataset": "{}_{}".format(config.data_type, config.dataset_num),
                            "dataset_ave_reward": replay_buffer.ave_reward,
@@ -367,12 +374,15 @@ def offline_train(config):
                            "IDQN state-action embed": config.resnet_hidden_dim,
                            "IDQN actor block": config.actor_blocks,
                            }
+        
         print(config_log_dict)
-        param_dict = os.path.join(outdir, 'config.json')
 
+        writer.add_text('configurations', str(config_log_dict))
+
+        param_dict = os.path.join(outdir, 'config.json')
         json_str = json.dumps(config_log_dict, separators=(',', ':'))
         json_str = json_str.replace(',', ',\n')
-        # 最后，写入文件
+
         with open(param_dict, 'w') as f:
             f.write(json_str)
 
@@ -394,8 +404,8 @@ def offline_train(config):
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
             eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
             if not config.no_log:
-                log_and_print('eval_return', eval_return, t)
-                log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t)
+                log_and_print('eval_return', eval_return, t, writer)
+                log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
                 run.log({"eval_return": eval_return, "normed_eval_return": eval_return/replay_buffer.ave_reward})
             # when eval finished, switch to train()
             ma_agent.prep_training(device=config.device)
@@ -403,7 +413,7 @@ def offline_train(config):
         # load joint datasets for JAL and indpendent trajectory for ind/seq training
         if config.marltype == "JAL":
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
-            ma_agent.update(sample, t, run)  
+            ma_agent.update(sample, t, writer, run)  
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
         elif config.marltype == "IND":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'bandit'] else ma_agent.num_predators
@@ -411,16 +421,19 @@ def offline_train(config):
             # 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
                 sample_i = samples[a_i]
-                ma_agent.update(sample_i, a_i, t, run)
+                ma_agent.update(sample_i, a_i, t, writer, run)   # 只有base srpo有 a_i 指定
         elif config.marltype == "CTDE" or config.marltype == "SEQ":
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，以及other policy actions
             # 一起输入给进去再分开，更新体现在ma agent内部
-            ma_agent.update(samples, t, run)
+            ma_agent.update(samples, t, writer, run)
         else:  # QMIX_SRPO
             pass
             
         progress_bar.update(1)
+
+    if not config.no_log:
+        writer.close()
 
     try:
         env.close()
@@ -475,8 +488,8 @@ if __name__ == '__main__':
 
     """   Unchangeable Params   """
     # log and save dir
-    parser.add_argument("--dir", type=str, default='/home/qiaodan/Code/diffmarl/results', help="tensorboard log directory")
-    parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
+    parser.add_argument("--dir", type=str, default='/data/qiaodan/code/diffmarl/results', help="tensorboard log directory")
+    parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
 
     # params for MPE envs
     parser.add_argument("--discrete_action", action='store_true', default=False)
@@ -510,8 +523,8 @@ if __name__ == '__main__':
 
     # regularization para
     parser.add_argument('--beta', type=float, default=0.2)  
-    parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2')  # HalfCheetah-v2_expert
-    parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
+    parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2')  # HalfCheetah-v2_expert
+    parser.add_argument('--diffusion_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
     # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
@@ -572,7 +585,7 @@ if __name__ == '__main__':
         config.tau = 0.005
         config.gamma = 0.99
     else:  # MaMujoco
-        config.num_steps = int(1e6)
+        # config.num_steps = int(1e6)
         config.steps_per_update = 10 # 也没用
         config.eval_interval = 5000
         config.logging_interval = 5000
