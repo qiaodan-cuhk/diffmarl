@@ -77,12 +77,12 @@ def train_ind_behavior(args, score_model, data_loader, agent_num, writer, start_
             best_loss = epoch_loss
             print("New lowest loss in epoch {}, Save best models".format(epoch))
             args.save_diff_dir
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "best_diffusion_{}.pth".format(agent_num)))
+            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "best_diffusion_{}.pth".format(agent_num)))
             # SRPO_premodels/env_id_level/IND/best_diffusion_i.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save models: Epoch {}".format(epoch))
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
             # SRPO_premodels/env_id_level/IND/diffusion_i_epoch150.pth   
         
 # MPE 的 JAL 需要修改
@@ -128,12 +128,12 @@ def train_joint_behavior(args, score_model, data_loader, writer, start_epoch=0):
         if args.save_model and epoch_loss < best_loss:
             best_loss = epoch_loss
             print("New lowest loss in epoch {}, Save best models".format(epoch))
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "JAL", "best_diffusion.pth"))
+            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "best_diffusion.pth"))
                 # SRPO_premodels/env_id_level/JAL/best_diffusion.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save models: Epoch {}".format(epoch))
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "JAL", "diffusion_{}.pth".format(epoch)))
+            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "diffusion_{}.pth".format(epoch)))
             # SRPO_premodels/env_id_level/JAL/diffusion_150.pth
 
 
@@ -174,7 +174,7 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 if args.mixed_data:
                     torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
                 else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
                 # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
@@ -182,7 +182,7 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 if args.mixed_data:
                     torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
     elif agent_num == 1:
         for epoch in tqdm_epoch:
@@ -218,14 +218,14 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 if args.mixed_data:
                     torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
                 else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
                 if args.mixed_data:
                     torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
 
         
@@ -308,8 +308,8 @@ def behavior(args):
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
-    if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", args.srpo_mode)):
-        os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", args.srpo_mode))
+    if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode)):
+        os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode))
 
 
     print("training behavior")
@@ -350,7 +350,7 @@ def pretrain_behavior_args():
 
 
     """   UnChangable params by users   """
-    parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
+    parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     # params for buffer and data
     parser.add_argument("--buffer_length", default=int(1e6), type=int)  # full marl dataset is 1e6 
@@ -378,7 +378,7 @@ def pretrain_behavior_args():
         config.save_diff_dir = os.path.join("./SRPO_premodels", f"{config.env_id}_mix", config.data_type, config.srpo_mode)
         if not os.path.exists(config.save_diff_dir):
             os.makedirs(config.save_diff_dir)
-        # '/home/qiaodan/Code/diffmarl/SRPO_premodels/HalfCheetah_mix/Expert/Seq' 
+        # '/data/qiaodan/code/diffmarl/SRPO_premodels_seed3/HalfCheetah_mix/Expert/Seq' 
     else:
         if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
             config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)

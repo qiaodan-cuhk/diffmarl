@@ -82,12 +82,12 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_ep
         if args.save_model and epoch_loss < best_loss:
             best_loss = epoch_loss
             print("New lowest critic loss in epoch {}, Save models".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "best_critic_{}.pth".format(agent_num)))
+            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "best_critic_{}.pth".format(agent_num)))
             # SRPO_premodels/env_id/IND/best_critic_i.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save critic models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
+            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
             # SRPO_premodels/env_id_level/IND/critic_1_epoch150.pth
 
 # MPE 的 JAL Q 需要修改
@@ -111,6 +111,8 @@ def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
             for item in ["obs", "action", "next_obs", "next_action"]:
                 data_concate[item] = torch.cat((d0[item], d1[item]), dim=1).to(args.device)
                 assert data_concate[item].size()[0] == args.batch_size
+            
+            # Simple Spread 这里不会报错，也可能是因为加载的ind训练
             data_concate["state"] = d0["state"].to(args.device)
             data_concate["next_state"] = d0["next_state"].to(args.device)
             data_concate["rewards"] = d0["rewards"].to(args.device)
@@ -151,7 +153,7 @@ def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
             if args.mixed_data:
                 torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, "JAL", "best_critic.pth"))
             else:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "JAL", "best_critic.pth"))
+                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "best_critic.pth"))
                 # SRPO_premodels/env_id_level/JAL/best_critic.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
@@ -159,7 +161,7 @@ def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
             if args.mixed_data:
                 torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, "JAL", "critic_epoch{}.pth".format(epoch)))
             else:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "JAL", "critic_epoch{}.pth".format(epoch)))
+                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "critic_epoch{}.pth".format(epoch)))
             # SRPO_premodels/env_id_level/JAL/critic_150.pth
 
 
@@ -247,8 +249,8 @@ def critic(args):
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
-    if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", args.srpo_mode)):
-        os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", args.srpo_mode))
+    if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode)):
+        os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode))
 
     """ Mixed Saving Dir """
     if args.mixed_data:
@@ -269,20 +271,20 @@ def pretrain_critic_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
+    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
     parser.add_argument("--data_type", default='expert', type=str)
-    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--dataset_num", default=3, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--device", default=1, type=int, help='cuda number')
-    parser.add_argument("--srpo_mode", default='IND', type=str)
+    parser.add_argument("--device", default=3, type=int, help='cuda number')
+    parser.add_argument("--srpo_mode", default='JAL', type=str)
     # params for networks
     parser.add_argument("--actor_blocks", default=3, type=int)
     parser.add_argument("--q_layer", default=2, type=int)
     parser.add_argument("--batch_size", default=512, type=int)
 
 
-    parser.add_argument('--dataset_dir', default='/home/qiaodan/Code/diffmarl/datasets', type=str)
+    parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     # params for buffer and data
     parser.add_argument("--buffer_length", default=int(1e6), type=int)
