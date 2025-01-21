@@ -218,18 +218,18 @@ def offline_train(config):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+    run = None
+    # run = wandb.init(
+    #     # set the wandb project where this run will be logged
+    #     project="MASRPO_{}".format(config.marltype),
+    #     name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
+    #     # track hyperparameters and run metadata
+    #     config=config
+    #     )
 
-    run = wandb.init(
-        # set the wandb project where this run will be logged
-        project="MASRPO_{}".format(config.marltype),
-        name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
-        # track hyperparameters and run metadata
-        config=config
-        )
-
-    config.beta = wandb.config.beta
-    config.diff_epoch = wandb.config.diff_epoch
-    config.critic_epoch = wandb.config.critic_epoch
+    # config.beta = wandb.config.beta
+    # config.diff_epoch = wandb.config.diff_epoch
+    # config.critic_epoch = wandb.config.critic_epoch
 
     
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
@@ -406,7 +406,9 @@ def offline_train(config):
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
-                run.log({"eval_return": eval_return, "normed_eval_return": eval_return/replay_buffer.ave_reward})
+
+                if run is not None:
+                    run.log({"eval_return": eval_return, "normed_eval_return": eval_return/replay_buffer.ave_reward})
             # when eval finished, switch to train()
             ma_agent.prep_training(device=config.device)
                 
@@ -563,8 +565,8 @@ if __name__ == '__main__':
     
     # dataset premodel path
     if config.env_id == 'HalfCheetah-v2':
-        config.critic_load_path = config.critic_load_path + '_{}'.format(config.data_type)
-        config.diffusion_load_path = config.diffusion_load_path + '_{}'.format(config.data_type)
+        config.critic_load_path = config.critic_load_path + f"_{config.data_type}_seed{config.dataset_num}"
+        config.diffusion_load_path = config.diffusion_load_path + f"_{config.data_type}_seed{config.dataset_num}"
 
 
     # make envs params

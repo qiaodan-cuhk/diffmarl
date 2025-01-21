@@ -176,8 +176,10 @@ class BASE_SRPO(object):
             # dic.update({"Q gradient"+str(agent_i): guidance})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
-            run.log({"IND/SRPO loss"+str(agent_i): loss_tot,
-                     "IND/action errors"+str(agent_i): error_a.item()})
+
+            if run is not None:
+                run.log({"IND/SRPO loss"+str(agent_i): loss_tot,
+                        "IND/action errors"+str(agent_i): error_a.item()})
             
         if self.config.env_id == 'bandit':
             return epsilon, guidance, a_plt_i
@@ -514,8 +516,10 @@ class JAL_SRPO(BASE_SRPO):
             dic.update({"JAL/action errors": error_a.item()})
             
             log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
-            run.log({"JAL/SRPO loss": loss_tot,
-                     "JAL/action errors": error_a.item()})
+
+            if run is not None:
+                run.log({"JAL/SRPO loss": loss_tot,
+                        "JAL/action errors": error_a.item()})
         
         if self.config.env_id == 'bandit':
             return  episilon, guidance, a_plt
@@ -643,8 +647,10 @@ class CTDE_SRPO(BASE_SRPO):
                 # dic.update({"Q gradient"+str(agent_i): guidance})
                 
                 log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
-                run.log({"CTDE/SRPO loss"+str(agent_id): loss_tot.item(),
-                         "CTDE/action errors"+str(agent_id): error_a.item()})
+
+                if run is not None:
+                    run.log({"CTDE/SRPO loss"+str(agent_id): loss_tot.item(),
+                            "CTDE/action errors"+str(agent_id): error_a.item()})
                 
 
         
@@ -771,8 +777,10 @@ class SEQ_SRPO(CTDE_SRPO):
                 # dic.update({"Q gradient"+str(agent_i): guidance})
                 
                 log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
-                run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
-                         "SEQ/action errors"+str(agent_id): error_a.item()})
+
+                if run is not None:
+                    run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
+                            "SEQ/action errors"+str(agent_id): error_a.item()})
                 
         
         if self.config.env_id == 'bandit':

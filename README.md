@@ -22,6 +22,7 @@ and SRPO
 - v0.4 April 30, 2024. Update new CTDE_SRPO, SEQ_SRPO, CTDE others, SEQ others. Performance bad on expert datasets.
 - v0.4 May 13, 2024. Delete algo with "others". Shortern MASRPO classes with hieration.
 - v0.5 Sep 30, 2024. Add mix_datasets.ipynb for mix datasets across multiple seeds. Add curve_plot.py for Ablation Study 1.
+- v0.6 Jan 18, 2025. 训练dataset 3 expert+dataset 1 medium，检查数据集对训练结果的影响。更换ogmarl数据集。
 
 
 TODO

@@ -12,6 +12,7 @@ SRPO_premodels/
 .idea/
 eval_result/
 wandb/
+ogmarl_data/
 
 
 
