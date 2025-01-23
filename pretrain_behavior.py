@@ -193,6 +193,7 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 data_i = data[agent_num]
                 data_0 = data[0]
 
+                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
                 # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
                 data_i['obs'] = torch.cat((data_i['obs'], data_0['action']), dim=1).to(args.device)
                 data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action']), dim=1).to(args.device)
@@ -281,6 +282,8 @@ def behavior(args):
         score_model= MASRPO_Behavior(input_dim=(state_dim+action_dim)*agent_num, output_dim=action_dim*agent_num, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)
         # JAL model is p(all_a|all_obs)
     elif args.srpo_mode == 'Seq':
+
+        """ 改成适配 n agents 的结构"""
         score_model= [MASRPO_Behavior(input_dim=state_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device),
                       MASRPO_Behavior(input_dim=state_dim+action_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)]
         # 第一个srpo p(a1|s)， 第二个Srpo p(a2|s,a1)
@@ -323,6 +326,10 @@ def behavior(args):
         agent_id = args.seq_agent_id
         train_seq_behavior(args, score_model[agent_id], replay_buffer, agent_id, writer, start_epoch=0)
     print("finished")
+
+
+
+
 
 def pretrain_behavior_args():
     parser = argparse.ArgumentParser()

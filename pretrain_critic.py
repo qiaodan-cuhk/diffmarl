@@ -1,4 +1,11 @@
 """ Pretrain joint Q(s,a) or advantage Q(s, a-i, ai) """
+# 需要确认的：
+# 1.添加env id选项，处理数据合并；
+# 2.确认mpe的另外两个任务，prey在不在数据集，以及obs/state；
+# 3.完善jal的数据合并，debug检查
+# Line 335 需要增加 2ant 4ant env info
+# Line 125 的 next action 似乎没用，数据集也没有
+
 
 import os
 import numpy as np
@@ -7,24 +14,23 @@ import tqdm
 import argparse
 import datetime
 from gym.spaces import Box, Discrete
-
 from utils.buffer import ReplayBuffer
-
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
+from torch.utils.tensorboard import SummaryWriter
+# from utils import get_args, pallaral_simple_eval_policy
 
+# IQL algo
+from algorithms.SRPO import MASRPO_IQL
+
+# MAMujoco
 try:
     from multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
     print ('MujocoMulti not installed')
-
+# bandit
 from bandit import ContinuousBanditEnv
-
-from torch.utils.tensorboard import SummaryWriter
-from algorithms.SRPO import MASRPO_IQL
-# from utils import get_args, pallaral_simple_eval_policy
-
-# make parallel MA-Env
+# make parallel MA-Env for MPE
 def make_parallel_env(env_id, seed, discrete_action):
     def get_env_fn(rank):
         env = make_env(env_id, discrete_action=discrete_action)
@@ -35,12 +41,12 @@ def make_parallel_env(env_id, seed, discrete_action):
 
 
 # Q(s, a_i)
-def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_epoch=0):
-    n_epochs = 200
-    tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
-    evaluation_inerval = 1
-    epoch_save_interval = 20
+def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, start_epoch=0):
+    n_epochs = args.training_epoch   # 200
+    evaluation_inerval = args.eval_interval   # 5
+    epoch_save_interval = args.save_interval  # 20
 
+    tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     best_loss = 1e5
 
     for epoch in tqdm_epoch:
@@ -48,7 +54,7 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_ep
         avg_bc_loss = 0.
         num_items = 0
         for step_in_epoch in range(10000):
-            data = data_loader.sample(args.batch_size, to_gpu=True)
+            data = data_loader.sample(args.batch_size, to_gpu=args.use_gpu)  # 如果用gpu, True
             data_i = data[agent_num]
             loss_policy, loss_bc = score_model.update_iql(data_i)
             avg_critic_loss += loss_policy.detach().cpu().numpy()
@@ -63,9 +69,12 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_ep
 
         """ Logging """
         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+
+            # 正常是要保留这个eval环境验证，记录eval reward来评估表现的
             # if (epoch % 5 == 4) or epoch==0:
                 # mean, std = pallaral_simple_eval_policy(score_model.deter_policy.select_actions,args.env,00)
                 # args.run.log({"eval/rew{}".format("deter"): mean}, step=epoch+1)
+
             writer.add_scalar("agent {}/v_loss".format(agent_num), score_model.q[0].v_loss.detach().cpu().numpy(), epoch+1)
             writer.add_scalar("agent {}/q_loss".format(agent_num), score_model.q[0].q_loss.detach().cpu().numpy(), epoch+1)
             writer.add_scalar("agent {}/q".format(agent_num), score_model.q[0].q.detach().cpu().numpy(), epoch+1)
@@ -90,12 +99,15 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, start_ep
             torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
             # SRPO_premodels/env_id_level/IND/critic_1_epoch150.pth
 
+
+
 # MPE 的 JAL Q 需要修改
-def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
-    n_epochs = 200
+def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epoch=0):
+    n_epochs = args.training_epoch   # 200
+    evaluation_inerval = args.eval_interval   # 5
+    epoch_save_interval = args.save_interval  # 20
+
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
-    evaluation_inerval = 1
-    epoch_save_interval = 20
     best_loss = 1e5
 
     for epoch in tqdm_epoch:
@@ -103,20 +115,32 @@ def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
         avg_bc_loss = 0.
         num_items = 0
         for step_in_epoch in range(10000):
-            data = data_loader.sample(args.batch_size, to_gpu=True)
-            # we need to concate marl datasets with [{}, {}] into one dict
-            d0 = data[0]
-            d1 = data[1]
-            data_concate = {}
-            for item in ["obs", "action", "next_obs", "next_action"]:
-                data_concate[item] = torch.cat((d0[item], d1[item]), dim=1).to(args.device)
-                assert data_concate[item].size()[0] == args.batch_size
+            data = data_loader.sample(args.batch_size, to_gpu=args.use_gpu)
             
-            # Simple Spread 这里不会报错，也可能是因为加载的ind训练
-            data_concate["state"] = d0["state"].to(args.device)
-            data_concate["next_state"] = d0["next_state"].to(args.device)
-            data_concate["rewards"] = d0["rewards"].to(args.device)
-            data_concate["done"] = d0["done"].to(args.device)
+            # we need to concate marl datasets with [{}, {}] into one dict
+            # used for 2 halfcheetah
+            if env_id in ['HalfCheetah-v2', '2-ant']:   # '4-ant'
+                d0 = data[0]
+                d1 = data[1]
+                data_concate = {}
+                for item in ["obs", "action", "next_obs", "next_action"]:
+                    data_concate[item] = torch.cat((d0[item], d1[item]), dim=1).to(args.device)
+                    assert data_concate[item].size()[0] == args.batch_size
+                # 以下内容不需要concate
+                data_concate["state"] = d0["state"].to(args.device)
+                data_concate["next_state"] = d0["next_state"].to(args.device)
+                data_concate["rewards"] = d0["rewards"].to(args.device)
+                data_concate["done"] = d0["done"].to(args.device)
+            elif env_id in ['simple_spread', 'simple_tag', 'simple_world']:
+                # 使用stack一次性处理所有agent的数据，MPE中obs 18维度是局部观测
+                # CN\Spread 3 agents; World 4 agents
+                data_concate = {
+                    "obs": torch.stack([d["obs"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
+                    "action": torch.stack([d["action"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
+                    "next_obs": torch.stack([d["next_obs"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
+                    "rewards": data[0]["rewards"].to(args.device),
+                    "done": data[0]["done"].to(args.device)
+                }
 
             loss_policy, loss_bc = score_model.update_iql(data_concate)
             avg_critic_loss += loss_policy.detach().cpu().numpy()
@@ -166,10 +190,10 @@ def train_joint_critic(args, score_model, data_loader, writer, start_epoch=0):
 
 
 def critic(args):
-    for dir in ["./SRPO_model_factory"]:
-        if not os.path.exists(dir):
-            os.makedirs(dir)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
+    # 要添加 2ant 4ant
     if args.env_id in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=args.env_args)
         env.seed(args.seed + 100)
@@ -183,6 +207,7 @@ def critic(args):
     else:   
         print("Env not in MaMujoco, bandit, MPE")
 
+
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
@@ -195,7 +220,7 @@ def critic(args):
         each_state_shape = [obsp.shape[0] for obsp in env.observation_space]
         each_action_shape = [acsp.shape[0] for acsp in env.action_space]
         each_action_max = [acsp.high[0] for acsp in env.action_space]
-        agent_num = len(each_action_shape) 
+        agent_num = len(each_action_shape)   # agent 数量
         state_dim = each_state_shape[0]
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
@@ -203,67 +228,60 @@ def critic(args):
         pass
         # 这里agents区分prey和predators
 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
 
     
     if args.srpo_mode == 'IND':
-        score_model= [MASRPO_IQL(input_dim=state_dim+action_dim, output_dim=action_dim, args=args).to(args.device) for agent in range(agent_num)]
+        score_model= [MASRPO_IQL(input_dim=state_dim+action_dim,
+                                 output_dim=action_dim,
+                                 args=args).to(args.device) for agent in range(agent_num)]
         for model in score_model:
             model.q[0].to(args.device)
     elif args.srpo_mode == 'JAL' or args.srpo_mode == 'CTDE':
-        score_model= MASRPO_IQL(input_dim=(state_dim+action_dim)*agent_num, output_dim=action_dim*agent_num, args=args).to(args.device)
+        score_model= MASRPO_IQL(input_dim=(state_dim+action_dim)*agent_num,
+                                output_dim=action_dim*agent_num,
+                                args=args).to(args.device)
         score_model.q[0].to(args.device)
-        # In MaMujuco, input is concated obs
+        # Input is concated obs
 
-
+    # Load Buffer
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
-        replay_buffer = ReplayBuffer(
-                args.buffer_length, agent_num,
-                [env_info['obs_shape'] for _ in env.observation_space],
-                [acsp.shape[0] for acsp in env.action_space],
-                is_mamujoco=True,
-                state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
-            )
+        replay_buffer = ReplayBuffer(args.buffer_length,
+                                     agent_num,
+                                     [env_info['obs_shape'] for _ in env.observation_space],
+                                     [acsp.shape[0] for acsp in env.action_space],
+                                     is_mamujoco=True,
+                                     state_dims=[env_info['state_shape'] for _ in env.observation_space],
+                                     device = args.device)
     elif args.env_id in ['simple_spread']:   # 'simple_tag', 'simple_world'
-        replay_buffer = ReplayBuffer(
-            args.buffer_length, agent_num,
-            each_state_shape,
-            [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
-        )
+        replay_buffer = ReplayBuffer(args.buffer_length,
+                                     agent_num,
+                                     each_state_shape,
+                                     [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space],
+                                     device = args.device)
+    replay_buffer.load_batch_data(args.dataset_dir, rew_scale=args.rew_scale)
 
-    replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
-
-
-    # replay_buffer = ReplayBuffer(
-    #         args.buffer_length, agent_num,
-    #         [env_info['obs_shape'] for _ in env.observation_space],
-    #         [acsp.shape[0] for acsp in env.action_space],
-    #         is_mamujoco=True,
-    #         state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
-    #     )
-    # replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
 
     """ Train Log Dir """
-    tb_log_path = os.path.join("./logs_SRPO_critic_pretrain", "{}_{}_{}_seed{}_buffer{}_{}".format(str(args.env_id), args.data_type, args.srpo_mode, args.seed, args.buffer_length, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")) )
+    tb_log_path = os.path.join("./logs_SRPO_critic_pretrain", "{}_{}_dataset{}_{}_seed{}_buffer{}_{}".format(str(args.env_id), args.data_type, args.dataset_num ,args.srpo_mode, args.seed, args.buffer_length, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")) )
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
     if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode)):
         os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode))
-
-    """ Mixed Saving Dir """
     if args.mixed_data:
         if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, args.srpo_mode)):
             os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, args.srpo_mode))
 
-    print("training critic")
+
     if args.srpo_mode == 'IND':
+        print(f"training IND critics, {agent_num} agents")
         for i in range(agent_num):
-            train_ind_critic(args, score_model[i], replay_buffer, i, writer, start_epoch=0)
+            train_ind_critic(args, score_model[i], replay_buffer, i, writer, env_id=args.env_id, start_epoch=0)
     elif args.srpo_mode == 'JAL' or 'CTDE':
-        train_joint_critic(args, score_model, replay_buffer, writer, start_epoch=0)
+        print(f"training JAL critics, {agent_num} agents")
+        train_joint_critic(args, score_model, replay_buffer, writer, env_id=args.env_id, start_epoch=0)
     print("finished")
+
 
 
 def pretrain_critic_args():
@@ -276,38 +294,48 @@ def pretrain_critic_args():
     parser.add_argument("--dataset_num", default=3, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--device", default=3, type=int, help='cuda number')
-    parser.add_argument("--srpo_mode", default='JAL', type=str)
+    parser.add_argument("--device", default=5, type=int, help='cuda number')
+    parser.add_argument("--srpo_mode", default='JAL', type=str)   # IND 或者 JAL
     # params for networks
     parser.add_argument("--actor_blocks", default=3, type=int)
     parser.add_argument("--q_layer", default=2, type=int)
     parser.add_argument("--batch_size", default=512, type=int)
-
-
+    # params for buffer and data
     parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    # params for buffer and data
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)
+    parser.add_argument("--buffer_length", default=int(1e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到1e5
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
-    # continuous MPE default False
-    parser.add_argument("--discrete_action", action='store_true', default=False)
 
+    # training/eval epochs
+    parser.add_argument("--training_epoch", default=200, type=int)
+    parser.add_argument("--eval_interval", default=5, type=int)
+    parser.add_argument("--save_interval", default=20, type=int)
+
+    # MPE, default False = continuous，如果命令行不指定，则采用默认值，如果指定了，采用True
+    parser.add_argument("--discrete_action", action='store_true', default=False)
     # mixed datasets
     parser.add_argument("--mixed_data", action='store_true', default=False)
 
-
     config = parser.parse_args()
 
-    config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+
+    # 只用于 mamujoco
+    # 需要增加 2ant 4ant
+    if config.env_id == "HalfCheetah-v2":      
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+    elif config.env_id == "2-ant":
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}  # 需要更新确认
+
+
     # combine dir
     if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
         if config.mixed_data:
-            config.dataset_dir = '/home/qiaodan/Code/diffmarl/datasets/mix_hc' + '/' + config.data_type + '/' + 'mixed_data'
+            config.dataset_dir = '/data/qiaodan/code/diffmarl/datasets/mix_hc' + '/' + config.data_type + '/' + 'mixed_data'
         else:
             config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
-    else:
-        config.dataset_dir = config.dataset_dir + '/' + config.env_id
+    elif config.env_id == 'bandit':
+        config.dataset_dir = config.dataset_dir + '/bandit'
 
 
     if config.use_gpu:

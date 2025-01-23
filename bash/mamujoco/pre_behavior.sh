@@ -12,6 +12,7 @@ TASK="HalfCheetah-v2"
 device=3
 
 agent_idx=1 # 用于指定train 0 还是 1
+
 # if train on mixed data: --mixed_data
 
 for types in "${datatypes[@]}"

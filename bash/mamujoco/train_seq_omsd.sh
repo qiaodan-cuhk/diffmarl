@@ -53,7 +53,3 @@ done
 
 # 等待所有后台任务完成
 wait
-
-# SRPO instruction
-# TASK="walker2d-medium-replay-v2"
-# python3 -u train_policy.py --expid ${TASK}-baseline-seed${seed} --env $TASK --seed ${seed} --actor_load_path ./SRPO_model_factory/${TASK}-baseline-seed${seed}/behavior_ckpt200.pth --critic_load_path ./SRPO_model_factory/${TASK}-baseline-seed${seed}/critic_ckpt150.pth
