@@ -132,12 +132,11 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
                 data_concate["rewards"] = d0["rewards"].to(args.device)
                 data_concate["done"] = d0["done"].to(args.device)
             elif env_id in ['simple_spread', 'simple_tag', 'simple_world']:
-                # 使用stack一次性处理所有agent的数据，MPE中obs 18维度是局部观测
-                # CN\Spread 3 agents; World 4 agents
+                # Only concatenate data for the first num_agents as predator args.predator_nums
                 data_concate = {
-                    "obs": torch.stack([d["obs"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
-                    "action": torch.stack([d["action"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
-                    "next_obs": torch.stack([d["next_obs"] for d in data], dim=1).reshape(args.batch_size, -1).to(args.device),
+                    "obs": torch.stack([data[i]["obs"] for i in range(args.predator_nums)], dim=1).reshape(args.batch_size, -1).to(args.device),
+                    "action": torch.stack([data[i]["action"] for i in range(args.predator_nums)], dim=1).reshape(args.batch_size, -1).to(args.device), 
+                    "next_obs": torch.stack([data[i]["next_obs"] for i in range(args.predator_nums)], dim=1).reshape(args.batch_size, -1).to(args.device),
                     "rewards": data[0]["rewards"].to(args.device),
                     "done": data[0]["done"].to(args.device)
                 }
@@ -225,10 +224,19 @@ def critic(args):
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
     elif args.env_id in ['simple_tag', 'simple_world']:
+        adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
+        # 去除 agent 预训练的数据，不需要score model
+        each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
+        each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
+        each_action_max = [env.action_space[i].high[0] for i in adversary_indices]
+        agent_num = len(adversary_indices) 
+        state_dim = each_state_shape[0]
+        action_dim = each_action_shape[0]
+        action_max = each_action_max[0]
         pass
         # 这里agents区分prey和predators
 
-
+    args.predator_nums = agent_num
     
     if args.srpo_mode == 'IND':
         score_model= [MASRPO_IQL(input_dim=state_dim+action_dim,
@@ -252,7 +260,7 @@ def critic(args):
                                      is_mamujoco=True,
                                      state_dims=[env_info['state_shape'] for _ in env.observation_space],
                                      device = args.device)
-    elif args.env_id in ['simple_spread']:   # 'simple_tag', 'simple_world'
+    elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']: 
         replay_buffer = ReplayBuffer(args.buffer_length,
                                      agent_num,
                                      each_state_shape,
@@ -289,12 +297,12 @@ def pretrain_critic_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
+    parser.add_argument("--env_id", default='simple_world', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
     parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=3, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--device", default=5, type=int, help='cuda number')
+    parser.add_argument("--device", default=0, type=int, help='cuda number')
     parser.add_argument("--srpo_mode", default='JAL', type=str)   # IND 或者 JAL
     # params for networks
     parser.add_argument("--actor_blocks", default=3, type=int)

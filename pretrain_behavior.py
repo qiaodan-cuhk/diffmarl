@@ -228,6 +228,98 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 else:
                     torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
+    elif agent_num == 2:
+        for epoch in tqdm_epoch:
+            avg_loss = 0.
+            num_items = 0
+            for step_in_epoch in range(10000):
+                data = data_loader.sample(args.batch_size)
+                data_2 = data[agent_num]
+                data_1 = data[1]
+                data_0 = data[0]
+                
+
+                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
+                # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
+                data_2['obs'] = torch.cat((data_2['obs'], data_0['action'], data_1['action']), dim=1).to(args.device)
+                data_2['next_obs'] = torch.cat((data_2['next_obs'], data_0['next_action'], data_1['next_action']), dim=1).to(args.device)
+                
+                loss2 = score_model.update_behavior(data_2)
+                avg_loss += score_model.loss.detach().cpu().numpy()
+                num_items += 1
+                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+
+            epoch_loss = score_model.loss.detach().cpu().numpy()
+            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+            """ Log by tensorboard"""
+            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+
+            if args.save_model and epoch_loss < best_loss:
+                best_loss = epoch_loss
+                print("New lowest loss in epoch {}, Save best models".format(epoch))
+                if args.mixed_data:
+                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
+                else:
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+            
+            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+                print("Save models: Epoch {}".format(epoch))
+                if args.mixed_data:
+                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                else:
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
+    elif agent_num == 3:
+        for epoch in tqdm_epoch:
+            avg_loss = 0.
+            num_items = 0
+            for step_in_epoch in range(10000):
+                data = data_loader.sample(args.batch_size)
+                data_i = data[agent_num]
+                data_0 = data[0]
+                data_1 = data[1]
+                data_2 = data[2]
+
+                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
+                # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
+                data_i['obs'] = torch.cat((data_i['obs'], data_0['action'], data_1['action'], data_2['action']), dim=1).to(args.device)
+                data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action'], data_1['next_action'], data_2['next_action']), dim=1).to(args.device)
+                
+                loss2 = score_model.update_behavior(data_i)
+                avg_loss += score_model.loss.detach().cpu().numpy()
+                num_items += 1
+                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+
+            epoch_loss = score_model.loss.detach().cpu().numpy()
+            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+            """ Log by tensorboard"""
+            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+
+            if args.save_model and epoch_loss < best_loss:
+                best_loss = epoch_loss
+                print("New lowest loss in epoch {}, Save best models".format(epoch))
+                if args.mixed_data:
+                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
+                else:
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+            
+            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+                print("Save models: Epoch {}".format(epoch))
+                if args.mixed_data:
+                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                else:
+                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
 
         
 
@@ -267,6 +359,15 @@ def behavior(args):
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
     elif args.env_id in ['simple_tag', 'simple_world']:
+        adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
+        # 去除 agent 预训练的数据，不需要score model
+        each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
+        each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
+        each_action_max = [env.action_space[i].high[0] for i in adversary_indices]
+        agent_num = len(adversary_indices) 
+        state_dim = each_state_shape[0]
+        action_dim = each_action_shape[0]
+        action_max = each_action_max[0]
         pass
         # 这里agents区分prey和predators
 
@@ -282,11 +383,19 @@ def behavior(args):
         score_model= MASRPO_Behavior(input_dim=(state_dim+action_dim)*agent_num, output_dim=action_dim*agent_num, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)
         # JAL model is p(all_a|all_obs)
     elif args.srpo_mode == 'Seq':
-
         """ 改成适配 n agents 的结构"""
-        score_model= [MASRPO_Behavior(input_dim=state_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device),
-                      MASRPO_Behavior(input_dim=state_dim+action_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)]
+        # score_model= [MASRPO_Behavior(input_dim=state_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device),
+        #               MASRPO_Behavior(input_dim=state_dim+action_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)]
         # 第一个srpo p(a1|s)， 第二个Srpo p(a2|s,a1)
+        score_model = [
+                        MASRPO_Behavior(
+                            input_dim=state_dim + action_dim + (i * action_dim if i > 0 else 0),
+                            output_dim=action_dim,
+                            marginal_prob_std=marginal_prob_std_fn,
+                            args=args
+                        ).to(args.device)
+                        for i in range(agent_num)
+                    ]
 
 
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
@@ -297,7 +406,7 @@ def behavior(args):
                 is_mamujoco=True,
                 state_dims=[env_info['state_shape'] for _ in env.observation_space], device = args.device
             )
-    elif args.env_id in ['simple_spread']:   # 'simple_tag', 'simple_world'
+    elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']:  
         replay_buffer = ReplayBuffer(
             args.buffer_length, agent_num,
             each_state_shape,
@@ -336,12 +445,12 @@ def pretrain_behavior_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment") # HalfCheetah-v2 bandit
+    parser.add_argument("--env_id", default='simple_tag', type=str, help="Name of environment") # HalfCheetah-v2 bandit
     parser.add_argument("--data_type", default='expert', type=str)  # medium-replay
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--device", default=1, type=int, help='cuda number')
+    parser.add_argument("--device", default=4, type=int, help='cuda number')
     parser.add_argument("--srpo_mode", default='Seq', type=str)
     # params for Score Network
     parser.add_argument("--actor_blocks", default=2, type=int)
@@ -353,7 +462,7 @@ def pretrain_behavior_args():
     parser.add_argument("--learning_rates", default=3e-4, type=float)
     parser.add_argument("--lr_anneal", default=True, type=bool)
 
-    parser.add_argument("--seq_agent_id", default=1, type=int)  # 加速训练，直接指定训练某一个agent 0 or 1
+    parser.add_argument("--seq_agent_id", default=2, type=int)  # 加速训练，直接指定训练某一个agent 0 or 1
 
 
     """   UnChangable params by users   """
@@ -402,4 +511,5 @@ def pretrain_behavior_args():
 
 if __name__ == "__main__":
     args = pretrain_behavior_args()
+    print(f"Training Score Models {args.env_id}: {args.data_type}: {args.srpo_mode}")
     behavior(args)
