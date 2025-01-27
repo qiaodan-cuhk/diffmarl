@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import copy
 import torch
 import torch.nn as nn
@@ -346,24 +347,7 @@ class MASRPO_IQL(nn.Module):
             v = self.q[0].vf(s).detach()
         adv = target_q - v
         temp = 10.0 if "maze" in self.args.env_id else 3.0
-        exp_adv = torch.exp(temp * adv.detach()).clamp(max=100.0)
-        # 这里与标准的IQL实现类似，都采用了100来max clamp
-        # 本来是用于 train actor 的
-        """   IQL 的原始实现
-        exp_a = jnp.exp((q - v) * agent.temperature)
-        exp_a = jnp.minimum(exp_a, 100.0)
-
-        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
-            dist = agent.actor.apply_fn(
-                {"params": actor_params}, batch["observations"], training=True
-            )
-
-            log_probs = dist.log_prob(batch["actions"])
-            actor_loss = -(exp_a * log_probs).mean()
-
-            return actor_loss, {"actor_loss": actor_loss, "adv": q - v}        
-        """
-        
+        exp_adv = torch.exp(temp * adv.detach()).clamp(max=100.0)        
 
         policy_out = self.deter_policy(s)
         bc_losses = torch.sum((policy_out - a)**2, dim=1)   # pi(a|s) - a_data
@@ -379,6 +363,7 @@ class MASRPO_IQL(nn.Module):
         return policy_loss, mean_bc_losses
 
 
+
 def update_target(new, target, tau):
     # Update the frozen target models
     for param, target_param in zip(new.parameters(), target.parameters()):
@@ -387,22 +372,28 @@ def update_target(new, target, tau):
 def asymmetric_l2_loss(u, tau):
     return torch.mean(torch.abs(tau - (u < 0).float()) * u**2)
 
+
 class IQL_Critic(nn.Module):
     def __init__(self, adim, sdim, args) -> None:
         super().__init__()
         self.q0 = TwinQ(adim, sdim, layers=args.q_layer).to(args.device)
-        print(args.q_layer)
         self.q0_target = copy.deepcopy(self.q0).to(args.device)
 
         self.vf = ValueFunction(sdim).to(args.device)
-        self.q_optimizer = torch.optim.Adam(self.q0.parameters(), lr=3e-4)
-        self.v_optimizer = torch.optim.Adam(self.vf.parameters(), lr=3e-4)
+        self.q_optimizer = torch.optim.Adam(self.q0.parameters(), lr=args.iql_critic_lr)   # 3e-4 有些任务爆炸，试试更小的lr
+        self.v_optimizer = torch.optim.Adam(self.vf.parameters(), lr=args.iql_critic_lr)
+
         self.discount = 0.99
         self.args = args
-        self.tau = 0.9 if "maze" in args.env_id else 0.7
-        print(self.tau)
+        if "maze" in args.env_id:
+            self.tau = 0.9
+        elif "simple" in args.env_id:
+            self.tau = 0.8
+        else:
+            self.tau = 0.7
+        self.clip_degree = 0.5  # grad clipping
 
-    def update_q0(self, data):
+    def update_q0(self,data):
         s = data["obs"]
         a = data["action"]
         r = data["rewards"]
@@ -415,9 +406,16 @@ class IQL_Critic(nn.Module):
         # Update value function
         v = self.vf(s)
         adv = target_q - v
+
+        # adv = adv.clamp(max=100.0)   # 新增clamp稳定训练
+
         v_loss = asymmetric_l2_loss(adv, self.tau)
         self.v_optimizer.zero_grad(set_to_none=True)
         v_loss.backward()
+
+        # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
+        # torch.nn.utils.clip_grad_norm_(self.vf.parameters(), self.clip_degree)  # 添加梯度裁剪
+
         self.v_optimizer.step()
         
         # Update Q function
@@ -428,6 +426,10 @@ class IQL_Critic(nn.Module):
         q_loss = sum(torch.nn.functional.mse_loss(q, targets) for q in qs) / len(qs)
         self.q_optimizer.zero_grad(set_to_none=True)
         q_loss.backward()
+
+        # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
+        # torch.nn.utils.clip_grad_norm_(self.q0.parameters(), self.clip_degree)  # 添加梯度裁剪
+
         self.q_optimizer.step()
         self.v_loss = v_loss
         self.q_loss = q_loss

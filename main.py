@@ -564,7 +564,7 @@ if __name__ == '__main__':
         config.device = "cpu"
     
     # dataset premodel path
-    if config.env_id == 'HalfCheetah-v2':
+    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
         config.critic_load_path = config.critic_load_path + f"_{config.data_type}_seed{config.dataset_num}"
         config.diffusion_load_path = config.diffusion_load_path + f"_{config.data_type}_seed{config.dataset_num}"
 

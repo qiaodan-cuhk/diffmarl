@@ -3,13 +3,13 @@
 # simple tag 4 0 4 0
 # simple world 1 0 1 2
 
-TASK="simple_world"   # simple xx
-device=(4 5)
+TASK="simple_tag"   # simple xx
+device=(1 2)
 declare -A dataset_seeds=(
-    ["expert"]=1
+    ["expert"]=4
     ["medium"]=0
-    ["medium-replay"]=1
-    ["random"]=2
+    ["medium-replay"]=4
+    ["random"]=0
 )
 
 marltype="JAL"      # Can train JAL, IND    seq使用 jal critic

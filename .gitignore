@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 # models and logs and datasets
+outputs/
 results/
 datasets/
 logs_SRPO_diffusion_pretrain/
@@ -13,6 +14,9 @@ SRPO_premodels/
 eval_result/
 wandb/
 ogmarl_data/
+envs/
+visual/bandit_traj
+
 
 
 

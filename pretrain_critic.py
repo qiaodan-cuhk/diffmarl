@@ -39,6 +39,15 @@ def make_parallel_env(env_id, seed, discrete_action):
         return env
     return DummyVecEnv([get_env_fn(0)])
 
+"""目前仅 joint critic 增加了grad norm记录"""
+def get_grad_norm(parameters):
+    """计算梯度范数的辅助函数"""
+    total_norm = 0.0
+    for p in parameters:
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+    return np.sqrt(total_norm)
 
 # Q(s, a_i)
 def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, start_epoch=0):
@@ -142,11 +151,14 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
                 }
 
             loss_policy, loss_bc = score_model.update_iql(data_concate)
+
+            
             avg_critic_loss += loss_policy.detach().cpu().numpy()
             avg_bc_loss += loss_bc.detach().cpu().numpy()
             num_items += 1
             writer.add_scalar('JAL/episode critic loss', loss_policy, step_in_epoch)
             writer.add_scalar('JAL/episode BC loss', loss_bc, step_in_epoch)
+
         tqdm_epoch.set_description('Average Critic Loss: {:5f}'.format(avg_critic_loss / num_items))
         
         epoch_loss = score_model.policy_loss.detach().cpu().numpy()
@@ -168,6 +180,15 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
             writer.add_scalar("JAL/mean bc loss", avg_bc_loss / num_items, epoch+1)
             # policy loss 用了 cosineAnnealing 150w steps
             writer.add_scalar("JAL/lr", score_model.deter_policy_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+            # 记录各网络的梯度范数
+            q_grad_norm = get_grad_norm(score_model.q[0].q0.parameters())
+            v_grad_norm = get_grad_norm(score_model.q[0].vf.parameters())
+            policy_grad_norm = get_grad_norm(score_model.deter_policy.parameters())
+            # 记录每个step的梯度范数
+            writer.add_scalar('Gradients/step_q_grad_norm', q_grad_norm, epoch+1)
+            writer.add_scalar('Gradients/step_v_grad_norm', v_grad_norm, epoch+1)
+            writer.add_scalar('Gradients/step_policy_grad_norm', policy_grad_norm, epoch+1)
         
         """ Save models """
         if args.save_model and epoch_loss < best_loss:
@@ -307,13 +328,14 @@ def pretrain_critic_args():
     # params for networks
     parser.add_argument("--actor_blocks", default=3, type=int)
     parser.add_argument("--q_layer", default=2, type=int)
-    parser.add_argument("--batch_size", default=512, type=int)
+    parser.add_argument("--batch_size", default=256, type=int)
     # params for buffer and data
     parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     parser.add_argument("--buffer_length", default=int(1e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到1e5
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
+    parser.add_argument("--iql_critic_lr", default=3e-4, type=float)
 
     # training/eval epochs
     parser.add_argument("--training_epoch", default=200, type=int)
