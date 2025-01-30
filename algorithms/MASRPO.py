@@ -121,8 +121,10 @@ class BASE_SRPO(object):
         """
         actions = []
 
+        """在simple tag和world里，nagents只考虑了diffusion的agent，没加prey agent"""
         # nagents = agents + prey (if have)
-        for i, obs in zip(range(self.nagents), observations):   
+        # for i, obs in zip(range(self.nagents), observations):
+        for i, obs in enumerate(observations):   
             if self.env_id in ['simple_world', 'simple_tag']:
                 if i < self.num_predators:
                     predator_action = self.agents[i].SRPO_policy.select_actions(obs)  # SRPO use Dilac sample action
@@ -659,7 +661,7 @@ class CTDE_SRPO(BASE_SRPO):
 
 
 
-class SEQ_SRPO(CTDE_SRPO):
+class OMSD(CTDE_SRPO):
     def __init__(
         self, 
         agent_init_params, # state & action dim
@@ -701,16 +703,32 @@ class SEQ_SRPO(CTDE_SRPO):
 
         # 第一个agent不变，策略、score、critic都是跟CTDE一样，更新也是
         # 第二个agent仅改变score，critic和策略网络不变
-        self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
-                                 output_dim=self.action_dim,
-                                 marginal_prob_std=marginal_prob_std_fn,
-                                 args=config),
-                        SRPO_ssd(input_dim = self.state_dim+self.action_dim+self.action_dim,
-                                 output_dim=self.action_dim,
-                                 marginal_prob_std=marginal_prob_std_fn,
-                                 args=config)]
+        # self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
+        #                          output_dim=self.action_dim,
+        #                          marginal_prob_std=marginal_prob_std_fn,
+        #                          args=config),
+        #                 SRPO_ssd(input_dim = self.state_dim+self.action_dim+self.action_dim,
+        #                          output_dim=self.action_dim,
+        #                          marginal_prob_std=marginal_prob_std_fn,
+        #                          args=config)]
+        self.agents = [
+            SRPO_CTDE(
+                input_dim=self.state_dim + self.action_dim,
+                output_dim=self.action_dim,
+                marginal_prob_std=marginal_prob_std_fn,
+                args=config
+            ) if i == 0 else SRPO_ssd(
+                input_dim=self.state_dim + (i+1)*self.action_dim,
+                output_dim=self.action_dim,
+                marginal_prob_std=marginal_prob_std_fn,
+                agent_idx=i,
+                args=config
+            )
+            for i in range(self.nagents)
+        ]
         for age in self.agents:
             age.q[0].to(self.device)
+
 
     def update(self, samples, t, writer, run):
         # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
@@ -720,14 +738,16 @@ class SEQ_SRPO(CTDE_SRPO):
         joint_a = []
         joint_s = []
         for agent_id, current_agent in enumerate(self.agents):
-                   
             s = samples[agent_id]['obs']
             current_agent.diffusion_behavior.eval()
-            a_curr = self.agents[agent_id].SRPO_policy(s).detach()   #用作计算Q值的joint actions，detach gradients且不需要添加gradient
+            """这里使用的是局部obs而不是全局state，mamujoco和mpe都是"""
+            # 每个agent的dilac policy输出动作，用作计算Q值的joint actions，detach gradients且不需要添加gradient
+            a_curr = self.agents[agent_id].SRPO_policy(s).detach()   
             joint_s.append(s)
             joint_a.append(a_curr)  
+        # 最后得到的joint_s = [obs, obs, obs]  joint_a = [a0, a1, a2]
             
-        joint_states = torch.cat(joint_s, dim=1)
+        joint_states = torch.cat(joint_s, dim=1)  # [3*obs, 1]
 
         # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
         # joint a = [a1, a2], feed in for qs = q[0].target(joint a, joint s)
@@ -736,6 +756,7 @@ class SEQ_SRPO(CTDE_SRPO):
             guide_all = []
             a_plt_all = []
         
+        """这里要修改，因为这个是为2 agent的第二个agent设计的，要修改joint a和joints，加入 agent idx 判断"""
         for agent_id, current_agent in enumerate(self.agents):
             # get data i with joint s+a
             if self.is_mamujoco:
@@ -748,10 +769,10 @@ class SEQ_SRPO(CTDE_SRPO):
                                 "a_joint": joint_a,
                 }
             else:
-                sample_bridge = {"s": samples[agent_id]["state"],
+                sample_bridge = {"s": samples[agent_id]["obs"],  # MPE 也是 obs 不是 state
                                 "a": samples[agent_id]["action"],
                                 "r": samples[agent_id]["rewards"],
-                                "s_": samples[agent_id]["next_state"],
+                                "s_": samples[agent_id]["next_obs"],  # MPE 也是 obs 不是 state
                                 "d": samples[agent_id]["done"],
                                 "s_joint": joint_states,
                                 "a_joint": joint_a,
@@ -778,9 +799,9 @@ class SEQ_SRPO(CTDE_SRPO):
                 
                 log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
 
-                if run is not None:
-                    run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
-                            "SEQ/action errors"+str(agent_id): error_a.item()})
+                # if run is not None:
+                #     run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
+                #             "SEQ/action errors"+str(agent_id): error_a.item()})
                 
         
         if self.config.env_id == 'bandit':

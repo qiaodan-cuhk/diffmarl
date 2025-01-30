@@ -33,7 +33,7 @@ except:
 from bandit import ContinuousBanditEnv
 
 from algorithms.madiffQL import MADiff, MADiff_JAL  #MADiff_seq, MADiff_CTCE
-from algorithms.MASRPO import IND_SRPO, JAL_SRPO, CTDE_SRPO, SEQ_SRPO     # VD_SRPO, CTDE_SRPO
+from algorithms.MASRPO import IND_SRPO, JAL_SRPO, CTDE_SRPO, OMSD     # VD_SRPO, CTDE_SRPO
 
 import wandb
 
@@ -87,11 +87,12 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
 
         mean_episode_reward = np.array(reward)
         return mean_episode_reward
-    else:
+    elif env_name == 'simple_spread':
         avg_predator_return = 0.
         env = make_parallel_env(env_name, seed + 100, discrete_action)
         for ep_i in range(0, eval_episodes):
-            obs = env.reset()
+            obs = env.reset()    # 修改过，返回的是list不再是array
+            obs = np.array(obs)  # 处理返回的list形态reset数据
             agent.prep_rollouts(device=device)
             for et_i in range(config.episode_length):
                 obs_len = agent.nagents
@@ -101,10 +102,72 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 # 把 obs_dim * n_agents 的tensor变成 [n * [obs_dim*1]] 的变量
                 torch_agent_actions = agent.step(torch_obs, explore=False)
                 if torch.is_tensor(torch_agent_actions):
-                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                    # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]]
+                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  
+                elif isinstance(torch_agent_actions, list):
+                    # 从 list[tensor, tensor, tensor] 变为 list[np[], np[], np[]]
+                    agent_actions = []
+                    for ac in torch_agent_actions:
+                        if torch.is_tensor(ac):
+                            agent_actions.append(ac.squeeze().data.numpy())
+                            # 最内层action必须是 [2]，不可以是[1,2]，否则在env.step中会报维度错误
+                            # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+                        elif isinstance(ac, np.ndarray):
+                            agent_actions.append(ac)
+                        else:
+                            raise TypeError(f"Unsupported type in list: {type(ac)}")
                 else:
                     agent_actions = torch_agent_actions
-                # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+                
+
+                actions = [agent_actions]
+                next_obs, rewards, dones, infos = env.step(actions)
+                # 这里修改了MPE的原函数 utils/env_wrappers，返回的next obs是一个list而不是array
+                next_obs = np.array(next_obs)
+                
+                if env_name in ['simple_tag', 'simple_world']:
+                    avg_predator_return += rewards[0][0]
+                else:
+                    avg_agent_reward = np.mean(rewards[0])
+                    avg_predator_return += avg_agent_reward
+
+                obs = next_obs
+
+        avg_predator_return /= eval_episodes
+        return avg_predator_return
+    elif env_name == 'simple_tag' or env_name == 'simple_world':
+        avg_predator_return = 0.
+        env = make_parallel_env(env_name, seed + 100, discrete_action)
+        for ep_i in range(0, eval_episodes):
+            obs = env.reset()    # 修改过，返回的是list不再是array
+            agent.prep_rollouts(device=device)
+            for et_i in range(config.episode_length):
+                obs_len = agent.nagents
+                if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
+                    obs_len += agent.num_preys
+                
+                # 新增代码适配simple tag/world环境
+                torch_obs = [Variable(torch.Tensor(obs_i).unsqueeze(0), requires_grad=False) for obs_i in obs[0]]
+                # 把 obs_dim * n_agents 的tensor变成 [n * [obs_dim*1]] 的变量
+                torch_agent_actions = agent.step(torch_obs, explore=False)
+                if torch.is_tensor(torch_agent_actions):
+                    # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]]
+                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  
+                elif isinstance(torch_agent_actions, list):
+                    # 从 list[tensor, tensor, tensor] 变为 list[np[], np[], np[]]
+                    agent_actions = []
+                    for ac in torch_agent_actions:
+                        if torch.is_tensor(ac):
+                            agent_actions.append(ac.squeeze().data.numpy())
+                            # 最内层action必须是 [2]，不可以是[1,2]，否则在env.step中会报维度错误
+                            # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+                        elif isinstance(ac, np.ndarray):
+                            agent_actions.append(ac)
+                        else:
+                            raise TypeError(f"Unsupported type in list: {type(ac)}")
+                else:
+                    agent_actions = torch_agent_actions
+                
 
                 actions = [agent_actions]
                 next_obs, rewards, dones, infos = env.step(actions)
@@ -254,7 +317,7 @@ def offline_train(config):
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
     elif config.env_id in ['simple_tag', 'simple_world']:
-        adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
+        adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']   # 这里agents区分prey和predators
         # 去除 agent 预训练的数据，不需要score model
         each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
         each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
@@ -263,8 +326,6 @@ def offline_train(config):
         state_dim = each_state_shape[0]
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
-        pass
-        # 这里agents区分prey和predators
 
 
   
@@ -324,7 +385,7 @@ def offline_train(config):
             print("Naive CTDE SRPO agents have been established")
         elif config.marltype == 'SEQ':
             algo_name = "SEQ_SRPO"
-            ma_agent = SEQ_SRPO.init_from_env(env, env_id = config.env_id, env_info=env_info,
+            ma_agent = OMSD.init_from_env(env, env_id = config.env_id, env_info=env_info,
                                             agent_alg="diffusion", adversary_alg="ddpg",
                                             gamma=config.gamma, tau=config.tau, lr=config.lr,
                                             hidden_dim = config.hidden_dim, denoise_steps = config.T,
@@ -454,7 +515,7 @@ def offline_train(config):
             # 一起输入给进去再分开，更新体现在ma agent内部
             ma_agent.update(samples, t, writer, run)
         else:  # QMIX_SRPO
-            pass
+            pass 
             
         progress_bar.update(1)
 
@@ -473,9 +534,9 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--env_id", default='simple_world', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
     parser.add_argument("--data_type", default='expert', type=str)
-    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
@@ -549,6 +610,7 @@ if __name__ == '__main__':
     # Dilac Policy layers, maze = 4, else = 2
     parser.add_argument('--policy_layer', type=int, default=None) 
     parser.add_argument('--regq', type=int, default=0)
+    parser.add_argument('--iql_critic_lr', type=float, default=3e-4)
     ##################################################
     
     config = parser.parse_args()

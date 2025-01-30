@@ -177,7 +177,7 @@ class SRPO_CTDE(nn.Module):
         
 # 第二个agent的policy维度需要调整，policy维度并没有变化
 class SRPO_ssd(nn.Module):
-    def __init__(self, input_dim, output_dim, marginal_prob_std, args=None):
+    def __init__(self, input_dim, output_dim, marginal_prob_std, agent_idx, args=None):
         super().__init__()
         # diffusion model is individual
         # input state+2action, output action
@@ -186,8 +186,8 @@ class SRPO_ssd(nn.Module):
         self.diffusion_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.diffusion_optimizer, T_max=2000000, eta_min=1e-5)
         # self.diffusion_optimizer = torch.optim.AdamW(self.diffusion_behavior.parameters(), lr=3e-4)
         # SRPO dilac policy is individual
-        self.SRPO_policy = Dirac_Policy(output_dim, input_dim-2*output_dim, layer=args.policy_layer).to(args.device)
-        # input=s+2a, output=a
+        self.SRPO_policy = Dirac_Policy(output_dim, input_dim-(agent_idx+1)*output_dim, layer=args.policy_layer).to(args.device)
+        # input=s+(agent_idx+1)a, output=a，保证输出是固定的action dim
         self.SRPO_policy_optimizer = torch.optim.Adam(self.SRPO_policy.parameters(), lr=3e-4)
         self.SRPO_policy_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.SRPO_policy_optimizer, T_max=args.n_policy_epochs * 10000, eta_min=0.)
 
@@ -200,7 +200,7 @@ class SRPO_ssd(nn.Module):
         # here we load a centralized/advantage Q value with IQL (can be replaced by ICQ/OMAR)
         n_agent_numbers = len(args.alg_types)
         self.q = []        
-        self.q.append(IQL_Critic(adim=output_dim*n_agent_numbers, sdim=(input_dim-2*output_dim)*n_agent_numbers, args=args))
+        self.q.append(IQL_Critic(adim=output_dim*n_agent_numbers, sdim=(input_dim-(agent_idx+1)*output_dim)*n_agent_numbers, args=args))
         # for mamujoco halfcheetah, state is 6 and action is 3*2
         # input joint s, output joint a
 
@@ -210,10 +210,7 @@ class SRPO_ssd(nn.Module):
         a_joint = data['a_joint'] # 用于计算Q值的action
 
         self.diffusion_behavior.eval()
-    
         a = self.SRPO_policy(s)
-        
-            
         t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
         # random noising time t
         alpha_t, std = self.marginal_prob_std(t)
@@ -221,9 +218,8 @@ class SRPO_ssd(nn.Module):
         perturbed_a = a * alpha_t[..., None] + z * std[..., None]
         # add noise to policy action, generate a_t
 
-
-        s_condition = torch.cat((s, a_joint[0]), dim=1).to(self.args.device)
-        # 第二个 agent score 维度是s+a
+        prefix_actions = torch.cat(a_joint[:agent_id], dim=1)
+        s_condition = torch.cat((s, prefix_actions), dim=1).to(self.args.device)
 
         with torch.no_grad():
             episilon = self.diffusion_behavior(perturbed_a, t, s_condition).detach()  # diffusion model prediction
@@ -239,19 +235,22 @@ class SRPO_ssd(nn.Module):
         else:
             assert False
 
+        """这里为什么先把dilac的action detach再require grad？"""
         detach_a = a.detach().requires_grad_(True)
-        a_joint[agent_id] = detach_a
+        a_joint[agent_id] = detach_a        # 把当前采样的action再放进a joint?有什么用
 
+        # 这里暂时不考虑后续or前序agent已经更新后采样的问题，
+        # 因为用了更新后的policy重新采样joitn action在2agent halfcheetah测试似乎效果不明显反而是副作用
         detach_a_joint = torch.cat(a_joint, dim=1)
 
-        # Dilac policy action and Q(s, a) 这里用的是JAL Q(state_tot, action_tot) s要改成concate的
+        # Dilac policy action and Q(s, a) 这里用的是JAL Q(state_tot, action_tot) s是所有人concate，detach a joint 也是
         qs = self.q[0].q0_target.both(detach_a_joint, s_joint)  
-        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0
+        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0       
         self.SRPO_policy.q = torch.mean(q)
 
-
+        # dq tot/da i gradient，手动保留梯度只到action这，不反传回dilac policy，这是为什么上面要detach
         guidance =  torch.autograd.grad(torch.sum(q), detach_a)[0].detach()
-        # dq/da gradient
+        
 
         if self.args.regq:
             guidance_norm = torch.mean(guidance ** 2, dim=-1, keepdim=True).sqrt()
