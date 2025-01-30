@@ -17,8 +17,8 @@ from gym.spaces import Box, Discrete
 from utils.buffer import ReplayBuffer
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
-from torch.utils.tensorboard import SummaryWriter
-# from utils import get_args, pallaral_simple_eval_policy
+from torch.utils.tensorboard import SummaryWriter\
+
 
 # IQL algo
 from algorithms.SRPO import MASRPO_IQL
@@ -38,6 +38,72 @@ def make_parallel_env(env_id, seed, discrete_action):
         np.random.seed(seed + rank * 1000)
         return env
     return DummyVecEnv([get_env_fn(0)])
+
+# 暂时只考虑JAL的eval 还没写完prey的逻辑
+def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
+    if env_name in ['HalfCheetah-v2']:
+        env = MujocoMulti(env_args=env_args)
+        env.seed(seed + 100)
+        all_episodes_rewards = []
+        for ep_i in range(eval_episodes):
+            env.reset()
+            done = False
+            episode_reward = 0.
+            while not done:
+                obs = env.get_obs()
+                torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(device) for i in range(len(obs))]
+                concat_obs = torch.cat(torch_obs, dim=1)
+                actions = agent.deter_policy.select_actions(concat_obs)  # [n]
+                if torch.is_tensor(actions):
+                    actions = actions.cpu().numpy()
+                # 解开concatenated动作
+                split_actions = np.split(actions, len(obs), axis=1)
+                # 执行动作
+                reward, done, info = env.step([a.squeeze(0) for a in split_actions])
+                episode_reward += reward
+            all_episodes_rewards.append(episode_reward)        
+        mean_episode_reward = np.mean(np.array(all_episodes_rewards))
+        return mean_episode_reward
+    else:
+        avg_predator_return = 0.
+        env = make_parallel_env(env_name, seed + 100, discrete_action)
+        for ep_i in range(0, eval_episodes):
+            obs = env.reset()
+            for et_i in range(25):   # mpe固定长度25
+                obs_len = agent.predator_nums
+                torch_obs_agent = torch.Tensor(obs[:,:obs_len].reshape(obs.shape[0], -1)).to(device)
+                # torch_obs = [Variable(torch.Tensor(np.vstack(obs[:, i])), requires_grad=False) for i in range(obs_len)]
+
+                torch_agent_actions = agent.deter_policy.select_actions(torch_obs_agent)
+
+                if torch.is_tensor(torch_agent_actions):
+                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                else:
+                    agent_actions = torch_agent_actions
+                # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+
+                if env_name in ['simple_tag', 'simple_world']:  # 需要额外加载prey的策略和选择动作
+                    prey_agents = DDPG()
+                    prey_agents.load_policy()
+                    torch_obs_prey = torch.Tensor(obs[:,obs_len:].reshape(obs.shape[0], -1)).to(device)
+                    prey_actions = prey_agents.select_actions(torch_obs_prey)
+                    actions = [agent_actions, prey_actions]
+                else:
+                    actions = [agent_actions]
+
+                next_obs, rewards, dones, infos = env.step(actions)
+                
+                if env_name in ['simple_tag', 'simple_world']:
+                    avg_predator_return += rewards[0][0]
+                else:
+                    avg_agent_reward = np.mean(rewards[0])
+                    avg_predator_return += avg_agent_reward
+
+                obs = next_obs
+
+        avg_predator_return /= eval_episodes
+        return avg_predator_return
+    
 
 """目前仅 joint critic 增加了grad norm记录"""
 def get_grad_norm(parameters):
@@ -81,6 +147,7 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
 
             # 正常是要保留这个eval环境验证，记录eval reward来评估表现的
             # if (epoch % 5 == 4) or epoch==0:
+                # eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
                 # mean, std = pallaral_simple_eval_policy(score_model.deter_policy.select_actions,args.env,00)
                 # args.run.log({"eval/rew{}".format("deter"): mean}, step=epoch+1)
 
@@ -186,9 +253,23 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
             v_grad_norm = get_grad_norm(score_model.q[0].vf.parameters())
             policy_grad_norm = get_grad_norm(score_model.deter_policy.parameters())
             # 记录每个step的梯度范数
-            writer.add_scalar('Gradients/step_q_grad_norm', q_grad_norm, epoch+1)
-            writer.add_scalar('Gradients/step_v_grad_norm', v_grad_norm, epoch+1)
-            writer.add_scalar('Gradients/step_policy_grad_norm', policy_grad_norm, epoch+1)
+            writer.add_scalar('Check/q_grad_norm', q_grad_norm, epoch+1)
+            writer.add_scalar('Check/v_grad_norm', v_grad_norm, epoch+1)
+            writer.add_scalar('Check/policy_grad_norm', policy_grad_norm, epoch+1)
+            writer.add_scalar('Check/adv', score_model.q[0].adv.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar('Check/q_std', score_model.q[0].q_std.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar('Check/q_max', score_model.q[0].q_max.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar('Check/q_min', score_model.q[0].q_min.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar('Check/v_next', score_model.q[0].v_next.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar('Check/v_next_std', score_model.q[0].v_next_std.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/v_loss", score_model.q[0].v_loss.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/q_loss", score_model.q[0].q_loss.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/q", score_model.q[0].q.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/v", score_model.q[0].v.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/rewards", score_model.q[0].r.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/mean_dones", score_model.q[0].d.detach().cpu().numpy(), epoch+1)
+            writer.add_scalar("Check/q_target", score_model.q[0].target.detach().cpu().numpy(), epoch+1)
+            
         
         """ Save models """
         if args.save_model and epoch_loss < best_loss:
@@ -244,20 +325,21 @@ def critic(args):
         state_dim = each_state_shape[0]
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
+        args.predator_nums = agent_num
     elif args.env_id in ['simple_tag', 'simple_world']:
         adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
         # 去除 agent 预训练的数据，不需要score model
         each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
         each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
         each_action_max = [env.action_space[i].high[0] for i in adversary_indices]
-        agent_num = len(adversary_indices) 
+        agent_num = len(adversary_indices)   # 只加载012这三个agent的数据，3号agent是prey，不需要训练和data
         state_dim = each_state_shape[0]
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
-        pass
+        args.predator_nums = agent_num
         # 这里agents区分prey和predators
 
-    args.predator_nums = agent_num
+    
     
     if args.srpo_mode == 'IND':
         score_model= [MASRPO_IQL(input_dim=state_dim+action_dim,
@@ -318,17 +400,17 @@ def pretrain_critic_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_world', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
-    parser.add_argument("--data_type", default='expert', type=str)
-    parser.add_argument("--dataset_num", default=3, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
+    parser.add_argument("--data_type", default='medium', type=str)
+    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--device", default=0, type=int, help='cuda number')
     parser.add_argument("--srpo_mode", default='JAL', type=str)   # IND 或者 JAL
     # params for networks
-    parser.add_argument("--actor_blocks", default=3, type=int)
-    parser.add_argument("--q_layer", default=2, type=int)
-    parser.add_argument("--batch_size", default=256, type=int)
+    # parser.add_argument("--actor_blocks", default=2, type=int)   # 在IQL中用不到，只在diffusion中用到scorenet IDQL
+    parser.add_argument("--q_layer", default=2, type=int)   # q_layer 是 IQL 中 TwinQ critic 的层数 
+    parser.add_argument("--batch_size", default=512, type=int)
     # params for buffer and data
     parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')

@@ -35,7 +35,6 @@ class TwinQ(nn.Module):
     def __init__(self, action_dim, state_dim, layers=2):
         super().__init__()
         dims = [state_dim + action_dim] +[256]*layers +[1]
-        # dims = [state_dim + action_dim, 256, 256, 1] # TODO
         self.q1 = mlp(dims)
         self.q2 = mlp(dims)
 
@@ -64,6 +63,7 @@ class Dirac_Policy(nn.Module):
 
     def forward(self, state):
         return self.net(state)
+    
     def select_actions(self, state):
         return self(state)
 

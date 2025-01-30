@@ -373,6 +373,10 @@ def asymmetric_l2_loss(u, tau):
     return torch.mean(torch.abs(tau - (u < 0).float()) * u**2)
 
 
+
+
+
+
 class IQL_Critic(nn.Module):
     def __init__(self, adim, sdim, args) -> None:
         super().__init__()
@@ -385,15 +389,9 @@ class IQL_Critic(nn.Module):
 
         self.discount = 0.99
         self.args = args
-        if "maze" in args.env_id:
-            self.tau = 0.9
-        elif "simple" in args.env_id:
-            self.tau = 0.8
-        else:
-            self.tau = 0.7
-        self.clip_degree = 0.5  # grad clipping
-
-    def update_q0(self,data):
+        self.tau = 0.9 if "maze" in args.env_id else 0.7
+        
+    def update_q0(self, data):
         s = data["obs"]
         a = data["action"]
         r = data["rewards"]
@@ -406,40 +404,116 @@ class IQL_Critic(nn.Module):
         # Update value function
         v = self.vf(s)
         adv = target_q - v
-
-        # adv = adv.clamp(max=100.0)   # 新增clamp稳定训练
+        self.adv = adv.mean()
 
         v_loss = asymmetric_l2_loss(adv, self.tau)
         self.v_optimizer.zero_grad(set_to_none=True)
         v_loss.backward()
-
-        # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
-        # torch.nn.utils.clip_grad_norm_(self.vf.parameters(), self.clip_degree)  # 添加梯度裁剪
-
         self.v_optimizer.step()
-        
+        self.v = v.mean()
+
         # Update Q function
         # 这里做了修改，1-done是256维度，乘以后面的256，1维度会错误的变成256，256
         targets = r.unsqueeze(1) + (1. - d.float()).unsqueeze(1) * self.discount * next_v.detach()
+
+        self.r = r.mean()
+        self.d = d.sum()
+        self.target = targets.mean()
+
         qs = self.q0.both(a, s)
-        self.v = v.mean()
         q_loss = sum(torch.nn.functional.mse_loss(q, targets) for q in qs) / len(qs)
         self.q_optimizer.zero_grad(set_to_none=True)
         q_loss.backward()
-
-        # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
-        # torch.nn.utils.clip_grad_norm_(self.q0.parameters(), self.clip_degree)  # 添加梯度裁剪
-
         self.q_optimizer.step()
+
         self.v_loss = v_loss
         self.q_loss = q_loss
+
         self.q = target_q.mean()
-        self.v = next_v.mean()
+        self.q_std = target_q.std()
+        self.q_max = target_q.max()
+        self.q_min = target_q.min()
+
+        self.v_next = next_v.mean()
+        self.v_next_std = next_v.std()
+
         # Update target
-        update_target(self.q0, self.q0_target, 0.005)        
+        update_target(self.q0, self.q0_target, 0.005)
 
 
+# 加了clip的 IQL
+# class IQL_Critic(nn.Module):
+#     def __init__(self, adim, sdim, args) -> None:
+#         super().__init__()
+#         self.q0 = TwinQ(adim, sdim, layers=args.q_layer).to(args.device)
+#         self.q0_target = copy.deepcopy(self.q0).to(args.device)
 
+#         self.vf = ValueFunction(sdim).to(args.device)
+#         self.q_optimizer = torch.optim.Adam(self.q0.parameters(), lr=args.iql_critic_lr)   # 3e-4 有些任务爆炸，试试更小的lr
+#         self.v_optimizer = torch.optim.Adam(self.vf.parameters(), lr=args.iql_critic_lr)
+
+#         self.discount = 0.99
+#         self.args = args
+#         if "maze" in args.env_id:
+#             self.tau = 0.9
+#         elif "simple" in args.env_id:
+#             self.tau = 0.8
+#         else:
+#             self.tau = 0.7
+#         self.clip_degree = 0.5  # grad clipping
+
+#         # # 新增Huber Loss
+#         # self.huber_loss = nn.HuberLoss(reduction='mean', delta=1.0)
+
+#     def update_q0(self,data):
+#         s = data["obs"]
+#         a = data["action"]
+#         r = data["rewards"]
+#         s_ = data["next_obs"]
+#         d = data["done"]
+#         with torch.no_grad():
+#             target_q = self.q0_target(a, s).detach()
+#             next_v = self.vf(s_).detach()
+
+#         # Update value function
+#         v = self.vf(s)
+#         adv = target_q - v
+
+#         adv = adv.clamp(-10, 10)   # 新增clamp稳定训练
+
+#         v_loss = asymmetric_l2_loss(adv, self.tau)
+#         self.v_optimizer.zero_grad(set_to_none=True)
+#         v_loss.backward()
+
+#         # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
+#         torch.nn.utils.clip_grad_norm_(self.vf.parameters(), self.clip_degree)  # 添加梯度裁剪
+#         self.v_optimizer.step()
+        
+
+#         # Update Q function
+#         # 这里做了修改，1-done是256维度，乘以后面的256，1维度会错误的变成256，256
+#         targets = r.unsqueeze(1) + (1. - d.float()).unsqueeze(1) * self.discount * next_v.detach()
+#         qs = self.q0.both(a, s)
+
+#         # 新增检查，是否因为qs导致q loss爆炸
+#         if len(qs) == 0:
+#             print("Warning: qs is empty!")
+    
+#         self.v = v.mean()
+#         q_loss = sum(torch.nn.functional.mse_loss(q, targets) for q in qs) / len(qs)
+#         self.q_optimizer.zero_grad(set_to_none=True)
+#         q_loss.backward()
+
+#         # # 为了避免梯度爆炸，新增clip，原始IQL和SRPO中没有
+#         torch.nn.utils.clip_grad_norm_(self.q0.parameters(), self.clip_degree)  # 添加梯度裁剪
+
+#         self.q_optimizer.step()
+#         self.v_loss = v_loss
+#         self.q_loss = q_loss
+#         self.q = target_q.mean()
+#         self.v = next_v.mean()
+#         # Update target
+#         update_target(self.q0, self.q0_target, 0.005)
 
 
 # # SRPO for SEQ_SRPO_others, 考虑了其他人的动作期望在loss里

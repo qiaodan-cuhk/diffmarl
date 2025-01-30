@@ -4,7 +4,7 @@
 # simple world 1 0 1 2
 
 TASK="simple_tag"   # simple xx
-device=(1 2)
+device=(0)
 declare -A dataset_seeds=(
     ["expert"]=4
     ["medium"]=0
@@ -13,7 +13,7 @@ declare -A dataset_seeds=(
 )
 
 marltype="JAL"      # Can train JAL, IND    seq使用 jal critic
-datatypes=("expert" "medium" "medium-replay" "random")
+datatypes=("random") # "expert" "medium" "medium-replay" 
 mix=False
 # if train on mixed data: --mixed_data
 

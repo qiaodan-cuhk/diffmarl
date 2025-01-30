@@ -47,6 +47,7 @@ def make_parallel_env(env_id, seed, discrete_action):
     return DummyVecEnv([get_env_fn(0)])
 
 # evaluate policy in eval module with envs(seed+100) on cpu
+"""这里要检查一下mpe的逻辑"""
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
     if env_name in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=env_args)
@@ -218,18 +219,7 @@ def offline_train(config):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-    run = None
-    # run = wandb.init(
-    #     # set the wandb project where this run will be logged
-    #     project="MASRPO_{}".format(config.marltype),
-    #     name="{}_seed{}_beta{}_diff{}_critic{}".format(config.data_type, config.seed, config.beta, config.diff_epoch, config.critic_epoch),
-    #     # track hyperparameters and run metadata
-    #     config=config
-    #     )
-
-    # config.beta = wandb.config.beta
-    # config.diff_epoch = wandb.config.diff_epoch
-    # config.critic_epoch = wandb.config.critic_epoch
+    run = None   # 用来控制wandb的，已经移除
 
     
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
@@ -243,10 +233,45 @@ def offline_train(config):
         env = MujocoMulti(env_args=env_args)
         env.seed(config.seed)
         env_info = env.get_env_info()
+
+
+    """参考pretrain，Jan.30 考虑新增"""
+    # 创建score model和load buffer时用得到
+    if config.env_id in ['HalfCheetah-v2', 'bandit']:
+        each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
+        # MaMujuco use obs as input
+        each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
+        each_action_shape = [acsp.shape[0] for acsp in env.action_space]
+        agent_num = len(each_action_shape) 
+        state_dim = each_obs_shape[0]
+        action_dim = each_action_shape[0]
+    elif config.env_id in ['simple_spread']:
+        each_state_shape = [obsp.shape[0] for obsp in env.observation_space]
+        each_action_shape = [acsp.shape[0] for acsp in env.action_space]
+        each_action_max = [acsp.high[0] for acsp in env.action_space]
+        agent_num = len(each_action_shape) 
+        state_dim = each_state_shape[0]
+        action_dim = each_action_shape[0]
+        action_max = each_action_max[0]
+    elif config.env_id in ['simple_tag', 'simple_world']:
+        adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
+        # 去除 agent 预训练的数据，不需要score model
+        each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
+        each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
+        each_action_max = [env.action_space[i].high[0] for i in adversary_indices]
+        agent_num = len(adversary_indices) 
+        state_dim = each_state_shape[0]
+        action_dim = each_action_shape[0]
+        action_max = each_action_max[0]
+        pass
+        # 这里agents区分prey和predators
+
+
   
     kwargs={'logging_interval': config.logging_interval,
             'no_log': config.no_log,
             'train_num_steps': config.num_steps}
+
 
     # select algorithms from [JAL, ind, seq, VD] + [DiffusionQL, SRPO]
     if config.difftype == "DQL":
@@ -308,6 +333,7 @@ def offline_train(config):
     else:
         print("Neither SRPO nor Diffusion-QL have been selected. Choose valid diffusion model")
              
+    """一些胡言乱语，暂时不知道有什么用"""
     # score 提取直接load joint diffusion，先生成联合动作然后denoise得到联合score，然后分别取两个分量给每个agent用作epsilon
     # sequential score 是独立的diffusion, 第一个人3维度action，6维度条件；第二个人3维度action，6+3维度condition，
     # 提取score的时候第一个人先denoise得到score，然后基于这个第一个人的采样动作结合state给到第二个人去denoise得到score
@@ -406,9 +432,6 @@ def offline_train(config):
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
-
-                if run is not None:
-                    run.log({"eval_return": eval_return, "normed_eval_return": eval_return/replay_buffer.ave_reward})
             # when eval finished, switch to train()
             ma_agent.prep_training(device=config.device)
                 
@@ -417,6 +440,7 @@ def offline_train(config):
             sample = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             ma_agent.update(sample, t, writer, run)  
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
+            # Jan 30回答：需要区分，simple tag/world的数据给了3号agent作为pray的数据，要丢掉
         elif config.marltype == "IND":
             nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'bandit'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
@@ -441,27 +465,7 @@ def offline_train(config):
         env.close()
     except Exception as e:
         print(f"An error occurred while closing the environment: {e}")
-
-# Pretrain SRPO_behavior and SRPO_critic for MARL version
         
-temperature_coefficients = {"simple_spread": 0.08,
-                            "HalfCheetah-v2": 0.02,
-                            "bandit": 0.02}
-# change into MARL version
-
-# sweep_config = {
-#     'method': 'random',  # 定义搜索方法，可以是 'grid' 或 'random'
-#     'metric': {
-#     'name': 'eval_return',
-#     'goal': 'maximize'
-#     },
-#     'parameters': {
-#         'diff_epoch': [49, 99, 149, 199],  # 指定 diff_epoch 的候选值
-#         'critic_epoch': [19, 39, 59, 79, 99, 119, 139, 159, 179, 199],  # 指定 critic_epoch 的候选值
-#         'beta': [0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 1.0]  # 指定 beta 的候选值
-#     }
-# }
-
 
 
 if __name__ == '__main__':
@@ -469,23 +473,24 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
-    parser.add_argument("--data_type", default='medium', type=str)
+    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--data_type", default='expert', type=str)
     parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
     parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ
-    parser.add_argument("--diff_epoch", default='best')  # 49,99,149
-    parser.add_argument("--critic_epoch", default='best')  # 19,39,59,79,99,119,139,159,179,199
+    parser.add_argument("--diff_epoch", default=149)  # 49,99,149
+    parser.add_argument("--critic_epoch", default=79)  # 19,39,59,79,99,119,139,159,179,199
+
 
     # Set diffusion params
     parser.add_argument("--T", default=5, type=int, help="Denoising steps for DDPM")
     parser.add_argument("--beta_schedule", default='vp', type=str)
     parser.add_argument("--seed", default=37, type=int, help="Random seed")
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    parser.add_argument("--device", default=1, type=int, help='cuda number')
+    parser.add_argument("--device", default=4, type=int, help='cuda number')
 
 
     """   Unchangeable Params   """
@@ -499,15 +504,15 @@ if __name__ == '__main__':
     # params for buffer and data
     parser.add_argument("--buffer_length", default=int(1e6), type=int)
     parser.add_argument("--episode_length", default=25, type=int, help='MPE epi_length is 25, MAMuJoCo epi_length is 1000')
-    parser.add_argument("--steps_per_update", default=100, type=int)
+    parser.add_argument("--steps_per_update", default=100, type=int)   # 似乎没用
     parser.add_argument("--hidden_dim", default=64, type=int)  # DDPG hidden dim
     # set_lr is unuseful
-    parser.add_argument("--set_lr", action='store_true')
-    parser.add_argument("--lr", default=0.001, type=float)
+    parser.add_argument("--set_lr", action='store_true')   # 没用
+    parser.add_argument("--lr", default=3e-4, type=float)    # 大部分实验用的1e-3，这似乎是DDPG的lr，而且DDPG并不更新
     parser.add_argument("--rew_scale", default=1.0, type=float)
     
     # params for RL
-    parser.add_argument("--gamma", default=0.95, type=float)
+    parser.add_argument("--gamma", default=0.99, type=float)
     parser.add_argument("--tau", default=0.01, type=float)
 
     # params for evaluation
@@ -524,9 +529,10 @@ if __name__ == '__main__':
     ######### args for SRPO To be revise #########
 
     # regularization para
-    parser.add_argument('--beta', type=float, default=0.2)  
-    parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2')  # HalfCheetah-v2_expert
-    parser.add_argument('--diffusion_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
+    parser.add_argument('--beta', type=float, default=0.01)  
+    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')
+    # parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')  # HalfCheetah-v2_expert
+    # parser.add_argument('--diffusion_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
     # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
@@ -544,11 +550,12 @@ if __name__ == '__main__':
     parser.add_argument('--policy_layer', type=int, default=None) 
     parser.add_argument('--regq', type=int, default=0)
     ##################################################
-
     
     config = parser.parse_args()
 
-    # config.env 替换为 config.env_id
+    temperature_coefficients = {"simple_spread": 0.08,
+                            "HalfCheetah-v2": 0.02,
+                            "bandit": 0.02}
     if config.beta is None:
         config.beta = temperature_coefficients[config.env_id]
 
@@ -565,14 +572,19 @@ if __name__ == '__main__':
     
     # dataset premodel path
     if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-        config.critic_load_path = config.critic_load_path + f"_{config.data_type}_seed{config.dataset_num}"
-        config.diffusion_load_path = config.diffusion_load_path + f"_{config.data_type}_seed{config.dataset_num}"
+        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
+        config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
 
 
     # make envs params
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
         config.lr=0.005
-        config.num_steps = 25000
+        config.num_steps = 100000
+        config.eval_interval = 500
+        config.logging_interval = 500
+        config.n_policy_epochs = 10
+        config.tau = 0.005
+        config.gamma=0.99
         if config.env_id == 'simple_world':
             config.steps_per_update=20
     elif config.env_id == 'bandit':
@@ -583,9 +595,7 @@ if __name__ == '__main__':
         config.episode_length = 1
         config.gamma=0.99
         config.dilac_lr = 0.01
-           
         config.tau = 0.005
-        config.gamma = 0.99
     else:  # MaMujoco
         # config.num_steps = int(1e6)
         config.steps_per_update = 10 # 也没用
@@ -594,9 +604,7 @@ if __name__ == '__main__':
         config.episode_length = 1000
         config.gamma=0.99
         config.lr = 0.0003  # 并没有进入 SRPO，只在DDPG上
-           
         config.tau = 0.005
-        config.gamma = 0.99
 
     if config.marltype == 'JAL':
         config.T=20

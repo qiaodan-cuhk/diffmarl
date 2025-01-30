@@ -4,6 +4,12 @@ from torch.autograd import Variable
 import torch
 import math
 
+# halfcheetah medium replay 46w 数据
+# simple spread mid replay 97500
+# simple tag mid replay 62500
+# simple world mid replay 80000
+
+
 class ReplayBuffer(object):
     """
     Replay Buffer for multi-agent RL with parallel rollouts
@@ -97,33 +103,34 @@ class ReplayBuffer(object):
             if "bandit" in dir:
                 curr_acs = curr_acs.reshape(-1,1)
 
-                
-            num_experiences = curr_obs.shape[0]
+            num_experiences = curr_obs.shape[0]    # 数据数量
 
             # random_indices = np.random.choice(int(100000), size=self.max_steps, replace=False)
-
             self.obs_buffs[i][:num_experiences] = curr_obs
             self.ac_buffs[i][:num_experiences] = curr_acs
             self.rew_buffs[i][:num_experiences] = curr_rews * rew_scale
             self.next_obs_buffs[i][:num_experiences] = curr_next_obs
-            self.done_buffs[i][:num_experiences] = curr_dones
+            # self.done_buffs[i][:num_experiences] = curr_dones    # 要修改mpe的原始数据增加done=1
 
             if self.is_mamujoco:
+                self.done_buffs[i][:num_experiences] = curr_dones
                 self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / np.sum(self.done_buffs[i][:num_experiences])
                 self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
-            else:
-                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / (num_experiences/25)  # 根据main.py, MPE episode length eval is 25
-                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
-
-
-            if self.is_mamujoco:
+                # mamujoco 额外状态信息
                 curr_states = np.load(dir + '/' + 'states_{}.npy'.format(i))
                 curr_next_states = np.load(dir + '/' + 'next_states_{}.npy'.format(i))
                 self.state_buffs[i][:num_experiences] = curr_states
                 self.next_state_buffs[i][:num_experiences] = curr_next_states
-        
-        # 改成 dataset subsample
-        self.filled_i = num_experiences
-        # self.filled_i = self.max_steps
+            elif "bandit" in dir:
+                self.done_buffs[i][:num_experiences] = curr_dones
+            else:
+                episode_length = 25
+                steps = np.arange(num_experiences)
+                modified_done = (steps % episode_length == episode_length-1).astype(np.float32)
+                self.done_buffs[i][:num_experiences] = np.maximum(curr_dones, modified_done)
 
+                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / (num_experiences/episode_length)  # 根据main.py, MPE episode length eval is 25
+                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+         
+        self.filled_i = num_experiences
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
