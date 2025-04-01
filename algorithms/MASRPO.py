@@ -316,12 +316,12 @@ class BASE_SRPO(object):
         
         return instance
 
-
+    # 这段要注意load到什么device上，目前看似乎被load到了cuda 0导致内存不足？很奇怪
     def load_pretrained_preys(self, filename):
         if not torch.cuda.is_available():
             save_dict = torch.load(filename, map_location=torch.device('cpu'))
         else:
-            save_dict = torch.load(filename)
+            save_dict = torch.load(filename, map_location=self.device)  # 保证prey也加载到与predator相同的device上
 
         if self.env_id in ['simple_tag', 'simple_world']:
             prey_params = save_dict['agent_params'][self.num_predators:]

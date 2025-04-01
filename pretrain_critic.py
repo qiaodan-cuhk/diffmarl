@@ -22,6 +22,7 @@ from torch.utils.tensorboard import SummaryWriter\
 
 # IQL algo
 from algorithms.SRPO import MASRPO_IQL
+from utils.agents import DDPGAgent
 
 # MAMujoco
 try:
@@ -53,7 +54,11 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 obs = env.get_obs()
                 torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(device) for i in range(len(obs))]
                 concat_obs = torch.cat(torch_obs, dim=1)
+                # concat因为这是joint action IQL
+
                 actions = agent.deter_policy.select_actions(concat_obs)  # [n]
+
+
                 if torch.is_tensor(actions):
                     actions = actions.cpu().numpy()
                 # 解开concatenated动作
@@ -61,35 +66,54 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 # 执行动作
                 reward, done, info = env.step([a.squeeze(0) for a in split_actions])
                 episode_reward += reward
+
             all_episodes_rewards.append(episode_reward)        
         mean_episode_reward = np.mean(np.array(all_episodes_rewards))
         return mean_episode_reward
-    else:
+    elif env_name in ['simple_spread', 'simple_tag', 'simple_world']:
         avg_predator_return = 0.
         env = make_parallel_env(env_name, seed + 100, discrete_action)
+
         for ep_i in range(0, eval_episodes):
-            obs = env.reset()
+            obs = env.reset()    # 修改过，返回的是list不再是array
+            obs = np.array(obs)  # 处理返回的list形态reset数据
+
+            # agent.prep_rollouts(device=device)    # 这个东西未必有用in IQL
+
             for et_i in range(25):   # mpe固定长度25
-                obs_len = agent.predator_nums
+                obs_len = args.predator_nums
+                """这里agent没有num preys这个属性"""
+                # if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
+                #     obs_len += agent.num_preys
+
                 torch_obs_agent = torch.Tensor(obs[:,:obs_len].reshape(obs.shape[0], -1)).to(device)
                 # torch_obs = [Variable(torch.Tensor(np.vstack(obs[:, i])), requires_grad=False) for i in range(obs_len)]
 
+                agent.deter_policy.to(device)   # 把模型挪到cpu上
                 torch_agent_actions = agent.deter_policy.select_actions(torch_obs_agent)
-
+                # split为三个agent
                 if torch.is_tensor(torch_agent_actions):
-                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
-                else:
-                    agent_actions = torch_agent_actions
-                # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+                    numpy_agent_actions = torch_agent_actions.detach().cpu().numpy()
+                # 解开concatenated动作
+                split_actions = np.split(numpy_agent_actions, obs_len, axis=1)
 
+                split_actions = [action.squeeze() for action in split_actions]
+                # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]]
+                # 最内层action必须是 [2]，不可以是[1,2]，否则在env.step中会报维度错误
+
+
+                """还没测试这部分"""
                 if env_name in ['simple_tag', 'simple_world']:  # 需要额外加载prey的策略和选择动作
-                    prey_agents = DDPG()
+                    # 原始的MASRPO中的prey加载方式
+                    # prey_agents = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
+                    # 为了debug暂时设置的
+                    prey_agents = []
                     prey_agents.load_policy()
                     torch_obs_prey = torch.Tensor(obs[:,obs_len:].reshape(obs.shape[0], -1)).to(device)
                     prey_actions = prey_agents.select_actions(torch_obs_prey)
-                    actions = [agent_actions, prey_actions]
+                    actions = [split_actions, prey_actions]
                 else:
-                    actions = [agent_actions]
+                    actions = [split_actions]
 
                 next_obs, rewards, dones, infos = env.step(actions)
                 
@@ -99,10 +123,19 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                     avg_agent_reward = np.mean(rewards[0])
                     avg_predator_return += avg_agent_reward
 
+
+                # 这里修改了MPE的原函数 utils/env_wrappers，返回的next obs是一个list而不是array
+                next_obs = np.array(next_obs)
+
                 obs = next_obs
+                
 
         avg_predator_return /= eval_episodes
         return avg_predator_return
+    else:
+        print("Wrong Env in Eval Policy")
+        return 0
+
     
 
 """目前仅 joint critic 增加了grad norm记录"""
@@ -114,6 +147,7 @@ def get_grad_norm(parameters):
             param_norm = p.grad.data.norm(2)
             total_norm += param_norm.item() ** 2
     return np.sqrt(total_norm)
+
 
 # Q(s, a_i)
 def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, start_epoch=0):
@@ -186,6 +220,9 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     best_loss = 1e5
 
+    # 用于加速验证，提前到这里，后边可以删掉
+    # mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args)
+
     for epoch in tqdm_epoch:
         avg_critic_loss = 0.
         avg_bc_loss = 0.
@@ -232,10 +269,11 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
 
         """ Log by tensorboard """
         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
-            # 简化训练，不做evaluate IQL
-            # if (epoch % 5 == 4) or epoch==0:
-            #     mean, std = pallaral_simple_eval_policy(score_model.deter_policy.select_actions,args.env,00)
-            #     args.run.log({"eval/rew{}".format("deter"): mean}, step=epoch+1)
+            if (epoch % 5 == 4) or epoch==0:
+                # mean, std = eval_policy(score_model.deter_policy.select_actions, args.env,00)
+                # 设定 args.eval_episodes 为 10，评估10个episodes再取平均
+                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args)
+                writer.add_scalar({"eval/reward": mean_episode_reward}, epoch+1)
 
             writer.add_scalar("JAL/v_loss", score_model.q[0].v_loss.detach().cpu().numpy(), epoch+1)
             writer.add_scalar("JAL/q_loss", score_model.q[0].q_loss.detach().cpu().numpy(), epoch+1)
@@ -296,7 +334,9 @@ def critic(args):
 
     # 要添加 2ant 4ant
     if args.env_id in ['HalfCheetah-v2']:
-        env = MujocoMulti(env_args=args.env_args)
+        env_args = {"scenario": args.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+        env = MujocoMulti(env_args=env_args)
+        args.env_args = env_args
         env.seed(args.seed + 100)
         env_info = env.get_env_info()
     elif args.env_id == 'bandit':
@@ -305,8 +345,10 @@ def critic(args):
     elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
         env = make_parallel_env(args.env_id, args.seed, args.discrete_action)
         env_args, env_info = None, None
+        args.env_args = env_args
     else:   
         print("Env not in MaMujoco, bandit, MPE")
+
 
 
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
@@ -337,6 +379,9 @@ def critic(args):
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
         args.predator_nums = agent_num
+
+        # 加一个args.prey_nums
+
         # 这里agents区分prey和predators
 
     

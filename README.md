@@ -119,6 +119,14 @@ diffmarl/
 - envs
 
 
+## 环境修改
+
+这里修改了原代码的 utils/env_wrappers，返回的next obs是一个list而不是array来兼容MPE和网络输入
+
+next_obs = np.array(next_obs)
+
+所以在使用和测试MPE时，要给next obs额外加一个array操作
+
 ## Requirements
 
 - Multi-agent Particle Environments: in envs/multiagent-particle-envs and install it by `pip install -e .`

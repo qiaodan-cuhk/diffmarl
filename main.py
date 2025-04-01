@@ -641,10 +641,10 @@ if __name__ == '__main__':
     # make envs params
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
         config.lr=0.005
-        config.num_steps = 100000
+        # config.num_steps = 200000
+        # config.n_policy_epochs = 20
         config.eval_interval = 500
         config.logging_interval = 500
-        config.n_policy_epochs = 10
         config.tau = 0.005
         config.gamma=0.99
         if config.env_id == 'simple_world':

@@ -3,17 +3,21 @@
 # simple tag 4 0 4 0
 # simple world 1 0 1 2
 
-TASK="simple_tag"   # simple xx
-device=(0)
+# simple spread 新增测试 replay 3 random 3
+# simple tag 新增测试 replay 0 random 1
+
+
+TASK="simple_spread"   # simple xx
+device=(1 4)
 declare -A dataset_seeds=(
     ["expert"]=4
     ["medium"]=0
-    ["medium-replay"]=4
-    ["random"]=0
+    ["medium-replay"]=3
+    ["random"]=3
 )
 
 marltype="JAL"      # Can train JAL, IND    seq使用 jal critic
-datatypes=("random") # "expert" "medium" "medium-replay" 
+datatypes=("random" "medium-replay") # "expert" "medium" "medium-replay" 
 mix=False
 # if train on mixed data: --mixed_data
 

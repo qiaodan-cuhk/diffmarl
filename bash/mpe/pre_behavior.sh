@@ -4,17 +4,20 @@
 # simple tag 4 0 4 0
 # simple world 1 0 1 2
 
-TASK="simple_world" 
-devices=(1 2)
+# simple spread 新增测试 replay 3 random 3
+# simple tag 新增测试 replay 0 random 1
+
+TASK="simple_spread" 
+devices=(1 4)
 declare -A dataset_seeds=(
     ["expert"]=1
     ["medium"]=0
-    ["medium-replay"]=1
-    ["random"]=2
+    ["medium-replay"]=3
+    ["random"]=3
 )
 
 marltype="Seq"      # default Seq, Can train JAL, IND, CTDE
-datatypes=("expert" "medium" "medium-replay" "random")  # "medium" "random"  先跑expert和replay
+datatypes=("medium-replay" "random")  # "medium" "random"  先跑expert和replay
 mix=False
 
 # 计数器，用于轮流分配 GPU
