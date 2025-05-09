@@ -5,11 +5,26 @@ __pycache__/
 
 # models and logs and datasets
 outputs/
-results/
+
+results/*
+!results/nips
+
 datasets/
 logs_SRPO_diffusion_pretrain/
 logs_SRPO_critic_pretrain/
+
 SRPO_premodels/
+# !SRPO_premodels/simple_spread_expert_seed0
+# !SRPO_premodels/simple_spread_medium_seed0
+# !SRPO_premodels/simple_spread_random_seed2
+# !SRPO_premodels/simple_tag_expert_seed4
+# !SRPO_premodels/simple_tag_medium_seed0
+# !SRPO_premodels/simple_tag_random_seed0
+# !SRPO_premodels/simple_world_expert_seed1
+# !SRPO_premodels/simple_world_medium_seed0
+# !SRPO_premodels/simple_world_random_seed2
+
+
 .idea/
 eval_result/
 wandb/

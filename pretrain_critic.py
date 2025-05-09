@@ -1,8 +1,5 @@
 """ Pretrain joint Q(s,a) or advantage Q(s, a-i, ai) """
 # 需要确认的：
-# 1.添加env id选项，处理数据合并；
-# 2.确认mpe的另外两个任务，prey在不在数据集，以及obs/state；
-# 3.完善jal的数据合并，debug检查
 # Line 335 需要增加 2ant 4ant env info
 # Line 125 的 next action 似乎没用，数据集也没有
 
@@ -17,10 +14,11 @@ from gym.spaces import Box, Discrete
 from utils.buffer import ReplayBuffer
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
-from torch.utils.tensorboard import SummaryWriter\
+from torch.utils.tensorboard import SummaryWriter
+from torch.autograd import Variable
 
 
-# IQL algo
+# IQL algo and prey agents
 from algorithms.SRPO import MASRPO_IQL
 from utils.agents import DDPGAgent
 
@@ -29,8 +27,10 @@ try:
     from multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
     print ('MujocoMulti not installed')
+
 # bandit
 from bandit import ContinuousBanditEnv
+
 # make parallel MA-Env for MPE
 def make_parallel_env(env_id, seed, discrete_action):
     def get_env_fn(rank):
@@ -40,8 +40,8 @@ def make_parallel_env(env_id, seed, discrete_action):
         return env
     return DummyVecEnv([get_env_fn(0)])
 
-# 暂时只考虑JAL的eval 还没写完prey的逻辑
-def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
+
+def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None, args=None):
     if env_name in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
@@ -74,20 +74,37 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
         avg_predator_return = 0.
         env = make_parallel_env(env_name, seed + 100, discrete_action)
 
-        for ep_i in range(0, eval_episodes):
-            obs = env.reset()    # 修改过，返回的是list不再是array
-            obs = np.array(obs)  # 处理返回的list形态reset数据
+        # 创建并加载 prey 代理
+        if env_name in ['simple_tag', 'simple_world']:
+            save_dict = torch.load(args["filename"], map_location=device)
+            prey_params = save_dict['agent_params'][args["predator_nums"]:]
 
-            # agent.prep_rollouts(device=device)    # 这个东西未必有用in IQL
+            prey_lr=3e-4
+            prey_hidden_dim=64
+            prey_agents = [DDPGAgent(lr=prey_lr, discrete_action=discrete_action, hidden_dim=prey_hidden_dim, **params) for params in args["adv_init_params"]]
+            prey_nums = len(args["adv_init_params"])
+
+            for prey in prey_agents:
+                for i, params in zip(range(prey_nums), prey_params):
+                        prey.load_params_without_optims(params)
+                prey.policy.eval()
+                prey.target_policy.eval()
+
+        obs_len = args["predator_nums"]  # 这是要控制的algo agent
+
+        for ep_i in range(0, eval_episodes):
+
+            obs = env.reset()    # 修改过，返回的是list不再是array
+            if env_name in ['simple_tag', 'simple_world']: 
+                # torch_obs = [Variable(torch.Tensor(obs_i).unsqueeze(0), requires_grad=False) for obs_i in obs[0]]
+                prey_obs = np.array(obs[0][obs_len:])
+                obs = np.array([obs[0][:obs_len]])  
+            else:
+                obs = np.array(obs)  # 处理返回的list形态reset数据
 
             for et_i in range(25):   # mpe固定长度25
-                obs_len = args.predator_nums
-                """这里agent没有num preys这个属性"""
-                # if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
-                #     obs_len += agent.num_preys
-
+                
                 torch_obs_agent = torch.Tensor(obs[:,:obs_len].reshape(obs.shape[0], -1)).to(device)
-                # torch_obs = [Variable(torch.Tensor(np.vstack(obs[:, i])), requires_grad=False) for i in range(obs_len)]
 
                 agent.deter_policy.to(device)   # 把模型挪到cpu上
                 torch_agent_actions = agent.deter_policy.select_actions(torch_obs_agent)
@@ -101,17 +118,17 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]]
                 # 最内层action必须是 [2]，不可以是[1,2]，否则在env.step中会报维度错误
 
-
-                """还没测试这部分"""
-                if env_name in ['simple_tag', 'simple_world']:  # 需要额外加载prey的策略和选择动作
-                    # 原始的MASRPO中的prey加载方式
-                    # prey_agents = [DDPGAgent(lr=lr, discrete_action=self.discrete_action, hidden_dim=self.hidden_dim, **params) for params in adv_init_params]
-                    # 为了debug暂时设置的
-                    prey_agents = []
-                    prey_agents.load_policy()
-                    torch_obs_prey = torch.Tensor(obs[:,obs_len:].reshape(obs.shape[0], -1)).to(device)
-                    prey_actions = prey_agents.select_actions(torch_obs_prey)
-                    actions = [split_actions, prey_actions]
+                if env_name in ['simple_tag', 'simple_world']:  
+                    """这里没有处理具有多个prey的情况，简化处理了"""
+                    torch_prey_obs = torch.Tensor(prey_obs).to(device)
+                    # torch_prey_obs = torch.Tensor(prey_obs[:,obs_len:].reshape(prey_obs.shape[0], -1)).to(device)
+                    # 因为目前环境只有一个prey，所以这个selection没什么问题
+                    prey_actions=[]
+                    # for i, prey_ob in enumerate(torch_prey_obs):
+                    prey_action = prey_agents[0].step(torch_prey_obs, explore=False)
+                    prey_action = prey_action.detach().cpu().numpy().squeeze()
+                    split_actions.append(prey_action)
+                    actions = [split_actions]
                 else:
                     actions = [split_actions]
 
@@ -123,11 +140,15 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                     avg_agent_reward = np.mean(rewards[0])
                     avg_predator_return += avg_agent_reward
 
-
                 # 这里修改了MPE的原函数 utils/env_wrappers，返回的next obs是一个list而不是array
-                next_obs = np.array(next_obs)
+                if env_name in ['simple_tag', 'simple_world']: 
+                    prey_obs = np.array(next_obs[0][obs_len:])
+                    obs = np.array([next_obs[0][:obs_len]])
+                else:
+                    obs = np.array(next_obs)  # 处理返回的list形态reset数据
 
-                obs = next_obs
+                # next_obs = np.array(next_obs)
+                # obs = next_obs
                 
 
         avg_predator_return /= eval_episodes
@@ -150,8 +171,10 @@ def get_grad_norm(parameters):
 
 
 # Q(s, a_i)
+# 有个问题是，当前模式是依次训练完毕每个agent，无法做eval rewards
 def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, start_epoch=0):
     n_epochs = args.training_epoch   # 200
+    epoch_steps = args.training_steps_per_epoch  # mujoco默认10000，mpe缩小到1000
     evaluation_inerval = args.eval_interval   # 5
     epoch_save_interval = args.save_interval  # 20
 
@@ -162,7 +185,7 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
         avg_critic_loss = 0.
         avg_bc_loss = 0.
         num_items = 0
-        for step_in_epoch in range(10000):
+        for step_in_epoch in range(epoch_steps):
             data = data_loader.sample(args.batch_size, to_gpu=args.use_gpu)  # 如果用gpu, True
             data_i = data[agent_num]
             loss_policy, loss_bc = score_model.update_iql(data_i)
@@ -211,27 +234,43 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
 
 
 
-# MPE 的 JAL Q 需要修改
+
 def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epoch=0):
     n_epochs = args.training_epoch   # 200
+    epoch_steps = args.training_steps_per_epoch  # mujoco默认10000，mpe缩小到1000
     evaluation_inerval = args.eval_interval   # 5
     epoch_save_interval = args.save_interval  # 20
 
-    tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
+    tqdm_epoch = tqdm.trange(start_epoch, n_epochs, leave=True, colour='green', dynamic_ncols=True)
     best_loss = 1e5
 
-    # 用于加速验证，提前到这里，后边可以删掉
-    # mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args)
+    if env_id in ['simple_tag', 'simple_world']:
+        adv_init_params = [
+            {
+                'num_in_pol': args.prey_state_dim[adv_id],
+                'num_out_pol': args.prey_action_dim[adv_id], 
+                'num_in_critic': args.prey_state_dim[adv_id]+args.prey_action_dim[adv_id]  
+            } for adv_id in range(args.prey_nums)
+        ]
+        args_prey={"adv_init_params": adv_init_params,
+                "filename": './datasets/{}/pretrained_adv_model.pt'.format(env_id),
+                "predator_nums": args.predator_nums
+                }
+    else:
+        args_prey = {"predator_nums": args.predator_nums}  # 简单环境只需要这个参数
+
 
     for epoch in tqdm_epoch:
         avg_critic_loss = 0.
         avg_bc_loss = 0.
         num_items = 0
-        for step_in_epoch in range(10000):
+
+        for step_in_epoch in range(epoch_steps):
             data = data_loader.sample(args.batch_size, to_gpu=args.use_gpu)
-            
+
             # we need to concate marl datasets with [{}, {}] into one dict
             # used for 2 halfcheetah
+
             if env_id in ['HalfCheetah-v2', '2-ant']:   # '4-ant'
                 d0 = data[0]
                 d1 = data[1]
@@ -256,24 +295,25 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
 
             loss_policy, loss_bc = score_model.update_iql(data_concate)
 
-            
             avg_critic_loss += loss_policy.detach().cpu().numpy()
             avg_bc_loss += loss_bc.detach().cpu().numpy()
             num_items += 1
             writer.add_scalar('JAL/episode critic loss', loss_policy, step_in_epoch)
             writer.add_scalar('JAL/episode BC loss', loss_bc, step_in_epoch)
 
-        tqdm_epoch.set_description('Average Critic Loss: {:5f}'.format(avg_critic_loss / num_items))
+        tqdm_epoch.set_description('JAL Ave Critic Loss: {:5f}'.format(avg_critic_loss / num_items))
         
         epoch_loss = score_model.policy_loss.detach().cpu().numpy()
 
         """ Log by tensorboard """
         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+
             if (epoch % 5 == 4) or epoch==0:
                 # mean, std = eval_policy(score_model.deter_policy.select_actions, args.env,00)
                 # 设定 args.eval_episodes 为 10，评估10个episodes再取平均
-                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args)
-                writer.add_scalar({"eval/reward": mean_episode_reward}, epoch+1)
+                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args, args=args_prey)
+                writer.add_scalar("eval/reward", mean_episode_reward, epoch+1)
+                score_model.deter_policy.to(args.device)
 
             writer.add_scalar("JAL/v_loss", score_model.q[0].v_loss.detach().cpu().numpy(), epoch+1)
             writer.add_scalar("JAL/q_loss", score_model.q[0].q_loss.detach().cpu().numpy(), epoch+1)
@@ -369,8 +409,8 @@ def critic(args):
         action_max = each_action_max[0]
         args.predator_nums = agent_num
     elif args.env_id in ['simple_tag', 'simple_world']:
+        # 待训练的捕食者
         adversary_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'adversary']
-        # 去除 agent 预训练的数据，不需要score model
         each_state_shape = [env.observation_space[i].shape[0] for i in adversary_indices]
         each_action_shape = [env.action_space[i].shape[0] for i in adversary_indices]
         each_action_max = [env.action_space[i].high[0] for i in adversary_indices]
@@ -379,13 +419,17 @@ def critic(args):
         action_dim = each_action_shape[0]
         action_max = each_action_max[0]
         args.predator_nums = agent_num
+        # 预加载的猎物
+        prey_indices = [i for i, agent_type in enumerate(env.agent_types) if agent_type == 'agent']
+        prey_state_shape = [env.observation_space[i].shape[0] for i in prey_indices]
+        prey_action_shape = [env.action_space[i].shape[0] for i in prey_indices]
+        prey_action_max = [env.action_space[i].high[0] for i in prey_indices]
+        
+        args.prey_nums = len(prey_indices)
+        args.prey_state_dim = prey_state_shape
+        args.prey_action_dim = prey_action_shape
+        
 
-        # 加一个args.prey_nums
-
-        # 这里agents区分prey和predators
-
-    
-    
     if args.srpo_mode == 'IND':
         score_model= [MASRPO_IQL(input_dim=state_dim+action_dim,
                                  output_dim=action_dim,
@@ -398,6 +442,7 @@ def critic(args):
                                 args=args).to(args.device)
         score_model.q[0].to(args.device)
         # Input is concated obs
+
 
     # Load Buffer
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
@@ -418,7 +463,10 @@ def critic(args):
 
 
     """ Train Log Dir """
-    tb_log_path = os.path.join("./logs_SRPO_critic_pretrain", "{}_{}_dataset{}_{}_seed{}_buffer{}_{}".format(str(args.env_id), args.data_type, args.dataset_num ,args.srpo_mode, args.seed, args.buffer_length, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")) )
+    tb_log_path = os.path.join("./logs_SRPO_critic_pretrain",
+                               "{}".format(str(args.env_id)),
+                               "{}".format(args.data_type),
+                               "tau{}_temp{}_dataset{}_{}_seed{}".format(args.tau, args.temp, args.dataset_num ,args.srpo_mode, args.seed))
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
@@ -459,13 +507,14 @@ def pretrain_critic_args():
     # params for buffer and data
     parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到1e5
+    parser.add_argument("--buffer_length", default=int(1e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到62500
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
     parser.add_argument("--iql_critic_lr", default=3e-4, type=float)
 
     # training/eval epochs
-    parser.add_argument("--training_epoch", default=200, type=int)
+    parser.add_argument("--training_epoch", default=200, type=int)              # 训练epoch
+    parser.add_argument("--training_steps_per_epoch", default=10000, type=int)   # 每个epoch训练steps
     parser.add_argument("--eval_interval", default=5, type=int)
     parser.add_argument("--save_interval", default=20, type=int)
 
@@ -473,6 +522,10 @@ def pretrain_critic_args():
     parser.add_argument("--discrete_action", action='store_true', default=False)
     # mixed datasets
     parser.add_argument("--mixed_data", action='store_true', default=False)
+
+    # SRPO 参数
+    parser.add_argument("--tau", default=0.7, type=float)
+    parser.add_argument("--temp", default=3.0, type=float)
 
     config = parser.parse_args()
 

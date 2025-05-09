@@ -316,7 +316,7 @@ class BASE_SRPO(object):
         
         return instance
 
-    # 这段要注意load到什么device上，目前看似乎被load到了cuda 0导致内存不足？很奇怪
+
     def load_pretrained_preys(self, filename):
         if not torch.cuda.is_available():
             save_dict = torch.load(filename, map_location=torch.device('cpu'))
@@ -449,7 +449,6 @@ class JAL_SRPO(BASE_SRPO):
             obs_predator = torch.cat(obs_predator, dim=1)
             obs_prey = observations[self.num_predators:]
             
-            self.agents[i].SRPO_policy.select_actions(obs)
             predator_actions = self.agents[0].SRPO_policy.select_actions(obs_predator) # input tensor[1,obs_dim * n] output array[1, act_dim * n]
             actions = np.split(predator_actions, self.num_predators, axis=0)
 

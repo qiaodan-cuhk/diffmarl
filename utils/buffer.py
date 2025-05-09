@@ -53,7 +53,7 @@ class ReplayBuffer(object):
         return self.filled_i
 
     def sample(self, N, to_gpu=False):
-        inds = np.random.choice(np.arange(self.filled_i), size=N, replace=False)
+        inds = np.random.choice(np.arange(self.filled_i), size=N, replace=True)  # 默认是false，但用true可以加速大数据集的采样效率
         if to_gpu:
             cast = lambda x: Variable(Tensor(x), requires_grad=False).to(self.device)
         else:
@@ -127,7 +127,8 @@ class ReplayBuffer(object):
                 episode_length = 25
                 steps = np.arange(num_experiences)
                 modified_done = (steps % episode_length == episode_length-1).astype(np.float32)
-                self.done_buffs[i][:num_experiences] = np.maximum(curr_dones, modified_done)
+                # self.done_buffs[i][:num_experiences] = np.maximum(curr_dones, modified_done)  # 原来的方案
+                self.done_buffs[i][:num_experiences] = modified_done  # 直接覆盖方案
 
                 self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / (num_experiences/episode_length)  # 根据main.py, MPE episode length eval is 25
                 self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])

@@ -264,13 +264,13 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type, epoch_num):
 
 
 def offline_train(config):
-    unique_token = "{}__{}__{}__seed{}".format(config.env_id, config.data_type, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"), config.seed)
+    unique_token = "{}_{}_beta{}_critic{}_seed{}_{}".format(config.marltype, config.data_type, config.beta, config.critic_epoch, config.seed, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"))
 
-    unique_token = config.marltype+"_"+unique_token
+    # unique_token = config.marltype+"_"+unique_token
     # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
-        outdir = os.path.join(config.dir, config.env_id, unique_token)
+        outdir = os.path.join(config.dir, "nips", config.env_id, unique_token)
         os.makedirs(outdir)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     

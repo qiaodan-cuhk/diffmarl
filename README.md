@@ -23,11 +23,15 @@ and SRPO
 - v0.4 May 13, 2024. Delete algo with "others". Shortern MASRPO classes with hieration.
 - v0.5 Sep 30, 2024. Add mix_datasets.ipynb for mix datasets across multiple seeds. Add curve_plot.py for Ablation Study 1.
 - v0.6 Jan 18, 2025. 训练dataset 3 expert+dataset 1 medium，检查数据集对训练结果的影响。更换ogmarl数据集。
+- v0.7 April 1, 2025. 结合ICML审稿意见，扩展mamujoco实验，以及检查pretrain critic/diffusion的reward质量和t-SNE质量。
 
 
 TODO
 
-- QMIX_SRPO
+- 验证IQL质量，尤其是mid-replay为什么总是训练特别快还容易爆炸
+- 验证diffusion效果
+- 扩展更多mamujoco
+
 
 ## Code Structure
 

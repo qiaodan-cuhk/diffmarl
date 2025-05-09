@@ -11,16 +11,24 @@ declare -A dataset_seeds=(
     ["random"]=2
 )
 
-seeds=(1 42 99)  # 改为数组形式
-# seeds=(42 99 1000 9999 23477)
+seeds=(42)  # 改为数组形式
+# seeds=(42 99 1000)
 
-device=(1 4)
-beta=(0.001 0.002)   # 0.1 0.2 0.5
+device=(1 2 3 4 5)
+# beta=(0.01 0.05 0.1 0.2 0.3 0.5 0.7)   # 0.001 0.002 0.005 0.007 0.01 0.05 0.1 0.2 0.3 0.5 0.7
 # beta=(0.01)
-datatypes=("medium")  # "expert" "medium-replay" "medium" "random"
+
+
+# 为每种数据类型定义对应的beta值范围
+declare -A type_betas=(
+    ["expert"]="0.001 0.003 0.005 0.01 0.05"
+    ["medium"]="0.01 0.02 0.03 0.04 0.05"
+    ["random"]="0.3 0.4 0.5 0.6 0.7"
+)
+datatypes=("expert" "medium" "random")  # "expert" "medium-replay" "medium" "random"
 
 diffusion_epoch_num=(199)           # 149
-critic_epoch_num=(119)    # 99
+critic_epoch_num=(499)    # 99
 
 difftype="SRPO"
 marltype="SEQ"
@@ -36,9 +44,12 @@ annealing_epochs=10
 
 for types in "${datatypes[@]}"
 do
+    # 获取当前数据类型对应的beta值
+    IFS=' ' read -r -a current_betas <<< "${type_betas[$types]}"
+    
     for i in "${seeds[@]}"
     do
-        for beta_i in "${beta[@]}"
+        for beta_i in "${current_betas[@]}"
         do
             for critic_i in "${critic_epoch_num[@]}"
             do
@@ -73,10 +84,3 @@ do
 done
 
 wait
-
-
-# # 每6个实验后等待所有子进程完成
-# if [ $counter -ge 6 ]; then
-#     wait
-#     counter=0  # 重置计数器
-# fi
