@@ -3,7 +3,7 @@
 # simple tag 4 0 4 0
 # simple world 1 0 1 2
 
-TASKS=("simple_spread" "simple_tag" "simple_world")
+TASKS=("simple_spread")   # "simple_tag" "simple_world"
 
 # 根据任务设置对应的dataset seed
 declare -A dataset_seeds=(
@@ -12,7 +12,7 @@ declare -A dataset_seeds=(
     ["simple_world"]="1"
 )
 
-seeds=(42)  # 改为数组形式
+seeds=(1 42 99 1000 8888)  # 改为数组形式
 # seeds=(42 99 1000)
 
 device=(1 2 3 4 5)
@@ -29,7 +29,7 @@ declare -A type_betas=(
 datatypes=("expert")  
 
 diffusion_epoch_num=(199)           # 149
-critic_epoch_num=(199 249 299 349 399 449 499)    # 99
+critic_epoch_num=(119)    # 99
 
 difftype="SRPO"
 marltype="SEQ"
