@@ -2,33 +2,26 @@
 
 
 ## Notification
-This branch is used for testing MPE tasks and MAMujoco tasks. The datasets are from OMAR 2021, which is collected by using old version MAMujoco envs with mujoco-200. Using mujoco>=2.1 will cause great performance drop.
+This branch is used for testing MPE tasks and MAMujoco tasks. The MPE datasets are from OMAR 2021. The MAMujoco datasets are from MADiff 2024, which is  collected by OG-MARL with new version MAMujoco envs mujoco-210. 
 
-Here we provide mujoco200 files in ```diffmarl/downloads/mujoco200``` and corresponding liscence ```mjkey.txt```. Otherwise, you may also download them from the website:
+Here we provide mujoco210 files in ```diffmarl/downloads/mujoco210```. Otherwise, you may also download them from the website:
 
 ```
-wget https://www.roboti.us/download/mujoco200_linux.zip
-unzip mujoco200_linux.zip
-```
-
-Then you may copy these files to your root dir:
-```
-mkdir ~/.mujoco
-cp mujoco200_linux.zip ~/.mujoco
-cd ~/.mujoco
-unzip mujoco200_linux.zip
-mv mujoco200_linux mujoco200
-cd path/to/download
-cp mjkey.txt ~/.mujoco
-cp mjkey.txt ~/.mujoco/mujoco200/bin
+MUJOCO_DIR=~/.mujoco
+mkdir -p $MUJOCO_DIR
+# 210
+wget https://github.com/deepmind/mujoco/releases/download/2.1.0/mujoco210-linux-x86_64.tar.gz -O $MUJOCO_DIR/mujoco210.tar.gz
+tar -xzf $MUJOCO_DIR/mujoco.tar.gz -C $MUJOCO_DIR
+rm $MUJOCO_DIR/mujoco.tar.gz
 ```
 
 Last, you need to set environment config in ```~/.bashrc```:
 ```
-# mujoco200
-export LD_LIBRARY_PATH=~/.mujoco/mujoco200/bin${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-export MUJOCO_KEY_PATH=~/.mujoco${MUJOCO_KEY_PATH}
+# mujoco210
+export LD_LIBRARY_PATH=${HOME}/.mujoco/mujoco210/bin
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libGLEW.so
 ```
+
 
 Test the installation:
 ```
