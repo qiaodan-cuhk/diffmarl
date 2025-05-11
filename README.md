@@ -1,5 +1,43 @@
-# Diffusion-MARL
+# OMSD: Offline MARL with Sequential Score Decomposition
 
+
+## Notification
+This branch is used for testing MPE tasks and MAMujoco tasks. The datasets are from OMAR 2021, which is collected by using old version MAMujoco envs with mujoco-200. Using mujoco>=2.1 will cause great performance drop.
+
+Here we provide mujoco200 files in ```diffmarl/downloads/mujoco200``` and corresponding liscence ```mjkey.txt```. Otherwise, you may also download them from the website:
+
+```
+wget https://www.roboti.us/download/mujoco200_linux.zip
+unzip mujoco200_linux.zip
+```
+
+Then you may copy these files to your root dir:
+```
+mkdir ~/.mujoco
+cp mujoco200_linux.zip ~/.mujoco
+cd ~/.mujoco
+unzip mujoco200_linux.zip
+mv mujoco200_linux mujoco200
+cd path/to/download
+cp mjkey.txt ~/.mujoco
+cp mjkey.txt ~/.mujoco/mujoco200/bin
+```
+
+Last, you need to set environment config in ```~/.bashrc```:
+```
+# mujoco200
+export LD_LIBRARY_PATH=~/.mujoco/mujoco200/bin${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+export MUJOCO_KEY_PATH=~/.mujoco${MUJOCO_KEY_PATH}
+```
+
+Test the installation:
+```
+cd ~/.mujoco/mujoco200/bin
+./simulate ../model/humanoid.xml
+```
+
+
+## Source Repo
 From Diffusion-QL
 
 - Diffusion Policies as an Expressive Policy Class for Offline Reinforcement Learning<br>
@@ -144,6 +182,7 @@ next_obs = np.array(next_obs)
     - 或者使用gymnasium，无需安装mujoco py和dm tree: ``` pip install gymnasium[mujoco] ```
 - mujoco_py200 
 - Multi-agent MuJoCo: Please check the [multiagent_mujoco](https://github.com/schroederdewitt/multiagent_mujoco) repo for more details about the environment. You can use the copy "multiagent_mujoco" in this directory without installation directly.
+- If ```pip3 install -U 'mujoco-py<2.1,>=2.0'``` fails, try ```pip install mujoco_py==2.0.2.8``` instead to install old version mujoco-py, corresponding to mujoco200. Try ```pip install mujoco-py==2.1.2.14``` to install new version mujoco-py, corresponding to mujoco210.
 
 
 Use pip to install all dependencies:
