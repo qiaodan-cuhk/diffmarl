@@ -43,7 +43,6 @@ visual/bandit_traj
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
