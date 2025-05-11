@@ -36,6 +36,14 @@ cd ~/.mujoco/mujoco200/bin
 ./simulate ../model/humanoid.xml
 ```
 
+You may meet the following error on linux because you don't have graphic screen on linux servers:
+```
+MuJoCo Pro version 2.00
+ERROR: could not initialize GLFW
+
+Press Enter to exit ...
+```
+
 
 ## Source Repo
 From Diffusion-QL
