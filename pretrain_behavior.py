@@ -48,7 +48,7 @@ def train_ind_behavior(args, score_model, data_loader, agent_num, writer, start_
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 50
+    epoch_save_interval = 100
     best_loss = 1e3
 
     for epoch in tqdm_epoch:
@@ -171,18 +171,12 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 print("New lowest loss in epoch {}, Save best models".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
                 # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
     elif agent_num == 1:
         for epoch in tqdm_epoch:
@@ -216,17 +210,11 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 print("New lowest loss in epoch {}, Save best models".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
     elif agent_num == 2:
         for epoch in tqdm_epoch:
@@ -262,17 +250,11 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 print("New lowest loss in epoch {}, Save best models".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
     elif agent_num == 3:
         for epoch in tqdm_epoch:
@@ -308,17 +290,11 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 print("New lowest loss in epoch {}, Save best models".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "best_diffusion_{}.pth".format(agent_num)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
-                if args.mixed_data:
-                    torch.save(score_model.state_dict(), os.path.join(args.save_diff_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                else:
-                    torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
 
         
@@ -328,7 +304,7 @@ def behavior(args):
         if not os.path.exists(dir):
             os.makedirs(dir)
 
-    if args.env_id in ['HalfCheetah-v2']:
+    if args.env_id in ['HalfCheetah-v2', '2ant', '4ant', '2halfcheetah']:
         env = MujocoMulti(env_args=args.env_args)
         env.seed(args.seed + 100)
         env_info = env.get_env_info()
@@ -342,7 +318,7 @@ def behavior(args):
         print("Env not in MaMujoco, bandit, MPE")
 
 
-    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', '2ant', '4ant', '2halfcheetah', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
         each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
@@ -398,7 +374,7 @@ def behavior(args):
                     ]
 
 
-    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', '2ant', '4ant', '2halfcheetah', 'bandit']:
         replay_buffer = ReplayBuffer(
                 args.buffer_length, agent_num,
                 [env_info['obs_shape'] for _ in env.observation_space],
@@ -413,7 +389,10 @@ def behavior(args):
             [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
         )
 
-    replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
+    if args.env_id in ['2ant', '4ant', '2halfcheetah']:
+        replay_buffer.load_batch_data_new_format(args.dataset_dir, rew_scale = args.rew_scale)
+    else:   
+        replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
 
     """ Train Log Dir """
     tb_log_path = os.path.join("./logs_SRPO_diffusion_pretrain", "{}_{}_{}_seed{}_{}".format(str(args.env_id), args.data_type, args.srpo_mode, args.seed, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")) )
@@ -475,31 +454,51 @@ def pretrain_behavior_args():
     # continuous MPE default False
     parser.add_argument("--discrete_action", action='store_true', default=False)
 
-    # mixed datasets
-    parser.add_argument("--mixed_data", action='store_true', default=False)
+    # mixed datasets,已经不需要了，移除
+    # parser.add_argument("--mixed_data", action='store_true', default=False)
 
 
     # parser.add_argument("--eval_models", default=False, type=bool)
 
     config = parser.parse_args()
 
-    config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+    # 根据不同环境配置不同的env_args
+    if config.env_id == "HalfCheetah-v2":
+        config.env_args = {
+            "scenario": "HalfCheetah-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x3",
+            "agent_obsk": 0,
+        }
+    elif config.env_id == "2ant":
+        config.env_args = {
+            "scenario": "Ant-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x4",
+            "agent_obsk": 0,
+        }
+    elif config.env_id == "4ant":
+        config.env_args = {
+            "scenario": "Ant-v2",
+            "episode_limit": 1000,
+            "agent_conf": "4x2",
+            "agent_obsk": 0,
+        }
+    elif config.env_id == "2halfcheetah":
+        config.env_args = {
+            "scenario": "HalfCheetah-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x3",
+            "agent_obsk": 0,
+        }
+    # config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+    
+    
     # combine dir
-    if config.mixed_data:
-        if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-            config.dataset_dir = config.dataset_dir + '/mix_hc/' + config.data_type
-        else:
-            config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/mix'
-        # make mix save dir
-        config.save_diff_dir = os.path.join("./SRPO_premodels", f"{config.env_id}_mix", config.data_type, config.srpo_mode)
-        if not os.path.exists(config.save_diff_dir):
-            os.makedirs(config.save_diff_dir)
-        # '/data/qiaodan/code/diffmarl/SRPO_premodels_seed3/HalfCheetah_mix/Expert/Seq' 
+    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
+        config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
     else:
-        if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-            config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
-        else:
-            config.dataset_dir = config.dataset_dir + '/' + config.env_id
+        config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type
 
     if config.use_gpu:
         config.device = f"cuda:{config.device}"

@@ -135,3 +135,60 @@ class ReplayBuffer(object):
          
         self.filled_i = num_experiences
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
+
+    # 用于mamujoco 210数据集格式from ogmarl
+    def load_batch_data_new_format(self, dir, rew_scale=1.0):
+        """
+        加载新格式的数据，数据格式为：
+        - obs.npy: 所有智能体的观察空间
+        - actions.npy: 所有智能体的动作
+        - rewards.npy: 所有智能体的奖励
+        - path_lengths.npy: 轨迹长度，用于确定episode结束
+        """
+        print('\033[1;33mloading new format batch data from {}...\033[1;0m'.format(dir))
+        
+        # 加载数据
+        observations = np.load(os.path.join(dir, 'obs.npy'))
+        actions = np.load(os.path.join(dir, 'actions.npy'))
+        rewards = np.load(os.path.join(dir, 'rewards.npy'))
+        path_lengths = np.load(os.path.join(dir, 'path_lengths.npy'))
+        
+        # 计算总样本数
+        num_experiences = observations.shape[0]
+        
+        # 根据path_lengths生成done信号
+        dones = np.zeros_like(rewards)  # 与rewards同形状
+        start = 0
+        for path_length in path_lengths:
+            dones[start + path_length - 1] = 1  # 每个轨迹的最后一步标记为done
+            start += path_length
+        
+        # 生成next_obs（通过移位）
+        next_observations = np.roll(observations, -1, axis=0)
+        # 对于每个轨迹的最后一步，其next_obs需要特殊处理
+        start = 0
+        for path_length in path_lengths:
+            if start + path_length < num_experiences:
+                next_observations[start + path_length - 1] = observations[start + path_length]
+            start += path_length
+        
+        # 为每个智能体分配数据
+        for i in range(self.num_agents):
+            # 假设数据的第二维是智能体维度
+            self.obs_buffs[i][:num_experiences] = observations[:, i]
+            self.ac_buffs[i][:num_experiences] = actions[:, i]
+            self.rew_buffs[i][:num_experiences] = rewards[:, i] * rew_scale
+            self.next_obs_buffs[i][:num_experiences] = next_observations[:, i]
+            self.done_buffs[i][:num_experiences] = dones[:, i]
+            
+            if self.is_mamujoco:
+                # 如果需要额外的状态信息，可以从observations中提取或加载额外的文件
+                self.state_buffs[i][:num_experiences] = observations[:, i]  # 可能需要调整
+                self.next_state_buffs[i][:num_experiences] = next_observations[:, i]  # 可能需要调整
+                
+                # 计算平均奖励和总奖励
+                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / len(path_lengths)
+                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+        
+        self.filled_i = num_experiences
+        self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences

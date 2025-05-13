@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# expert 用 datanum 3最好，medium+replay用datanum 1最好
+# expert 用 datanum 3最好，medium+replay用datanum 1最好 random用的是0
 
 datatypes=("medium" "medium-replay")  # "expert" "medium" "medium-replay" "random"
 dataset_seed=1   # 1 2 3

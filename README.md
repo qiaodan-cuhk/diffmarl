@@ -18,24 +18,36 @@ rm $MUJOCO_DIR/mujoco.tar.gz
 Last, you need to set environment config in ```~/.bashrc```:
 ```
 # mujoco210
-export LD_LIBRARY_PATH=${HOME}/.mujoco/mujoco210/bin
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libGLEW.so
+export LD_LIBRARY_PATH=${HOME}/.mujoco/mujoco210/bin:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib64/libGLEW.so
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia
 ```
 
 
-Test the installation:
+Test the mamujoco 210:
 ```
-cd ~/.mujoco/mujoco200/bin
-./simulate ../model/humanoid.xml
+python diffmarl/test_mujoco210.py
 ```
 
-You may meet the following error on linux because you don't have graphic screen on linux servers:
-```
-MuJoCo Pro version 2.00
-ERROR: could not initialize GLFW
+Notice:
+Currently we install the env with madiff as 
 
-Press Enter to exit ...
+```bash
+sudo apt-get update
+sudo apt-get install libssl-dev libcurl4-openssl-dev swig
+conda create -n omsd python=3.8
+conda activate omsd
+pip install torch==1.12.1+cu113 --extra-index-url https://download.pytorch.org/whl/cu113
+pip install -r requirements.txt  (madiff)
+# setup mamujoco
+pip install -e third_party/multiagent_mujoco
+pip install Cython==0.29.28
+pip install tensorboard==2.11.0
+pip install tensorboard-logger==0.1.0
+pip install wandb==0.19.3
+pip install seaborn==0.13.2
 ```
+
 
 
 ## Source Repo
