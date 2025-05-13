@@ -272,6 +272,8 @@ def offline_train(config):
     if not config.no_log:
         outdir = os.path.join(config.dir, "nips", config.env_id, unique_token)
         os.makedirs(outdir)
+        save_dir = os.path.join(config.save_dir, config.env_id, config.data_type, config.dataset_num, config.marltype)
+        os.makedirs(save_dir, exist_ok=True)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     
     torch.manual_seed(config.seed)
@@ -516,6 +518,14 @@ def offline_train(config):
             ma_agent.update(samples, t, writer, run)
         else:  # QMIX_SRPO
             pass 
+
+
+        # 定期保存每个智能体的策略网络
+        if not config.no_log and t % config.save_interval == 0:
+            for i, agent in enumerate(ma_agent.agents):
+                save_path = os.path.join(save_dir, f'actor_{i}.pth')
+                torch.save(agent.SRPO_policy.state_dict(), save_path)
+            print(f'\033[1;32m在步数 {t} 保存了所有智能体的策略网络\033[1;0m')
             
         progress_bar.update(1)
 
@@ -611,6 +621,10 @@ if __name__ == '__main__':
     parser.add_argument('--policy_layer', type=int, default=None) 
     parser.add_argument('--regq', type=int, default=0)
     parser.add_argument('--iql_critic_lr', type=float, default=3e-4)
+
+    parser.add_argument("--save_dir", type=str, default='/data/qiaodan/code/diffmarl/saved_models', help="模型保存目录")
+    parser.add_argument("--save_interval", default=5000, type=int, help="保存模型的间隔步数")
+
     ##################################################
     
     config = parser.parse_args()
