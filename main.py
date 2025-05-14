@@ -272,7 +272,13 @@ def offline_train(config):
     if not config.no_log:
         outdir = os.path.join(config.dir, "nips", config.env_id, unique_token)
         os.makedirs(outdir)
-        save_dir = os.path.join(config.save_dir, config.env_id, config.data_type, config.dataset_num, config.marltype)
+        save_dir = os.path.join(
+            config.save_dir, 
+            config.env_id, 
+            config.data_type, 
+            f"dataset{str(config.dataset_num)}",  # 将整数转换为字符串
+            config.marltype
+        )
         os.makedirs(save_dir, exist_ok=True)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     

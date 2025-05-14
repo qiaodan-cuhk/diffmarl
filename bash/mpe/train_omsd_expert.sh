@@ -3,6 +3,8 @@
 # simple tag 4 0 4 0
 # simple world 1 0 1 2
 
+# 用于训练simple spread的critic
+
 TASKS=("simple_spread")   # "simple_tag" "simple_world"
 
 # 根据任务设置对应的dataset seed
