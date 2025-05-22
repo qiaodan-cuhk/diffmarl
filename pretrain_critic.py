@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import tqdm
 import argparse
-import datetime
+from datetime import datetime
 from gym.spaces import Box, Discrete
 from utils.buffer import ReplayBuffer
 from utils.make_env import make_env
@@ -56,11 +56,14 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 concat_obs = torch.cat(torch_obs, dim=1)
                 # concat因为这是joint action IQL
 
-                actions = agent.deter_policy.select_actions(concat_obs)  # [n]
+                with torch.no_grad():  # 添加这行，在评估时不需要计算梯度
+                    actions = agent.deter_policy.select_actions(concat_obs)  # [n]
+                # actions = agent.deter_policy.select_actions(concat_obs)  # [n]
 
 
                 if torch.is_tensor(actions):
-                    actions = actions.cpu().numpy()
+                    # actions = actions.cpu().numpy()
+                    actions = actions.detach().cpu().numpy()
                 # 解开concatenated动作
                 split_actions = np.split(actions, len(obs), axis=1)
                 # 执行动作
@@ -256,8 +259,10 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
                 "filename": './datasets/{}/pretrained_adv_model.pt'.format(env_id),
                 "predator_nums": args.predator_nums
                 }
-    else:
+    elif env_id in ['simple_spread']:
         args_prey = {"predator_nums": args.predator_nums}  # 简单环境只需要这个参数
+    else:
+        args_prey={} 
 
 
     for epoch in tqdm_epoch:
@@ -311,7 +316,8 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
             if (epoch % 5 == 4) or epoch==0:
                 # mean, std = eval_policy(score_model.deter_policy.select_actions, args.env,00)
                 # 设定 args.eval_episodes 为 10，评估10个episodes再取平均
-                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args, args=args_prey)
+                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device=args.device, env_args=args.env_args, args=args_prey)
+                # mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args, args=args_prey)  # MPE环境
                 writer.add_scalar("eval/reward", mean_episode_reward, epoch+1)
                 score_model.deter_policy.to(args.device)
 
@@ -463,10 +469,13 @@ def critic(args):
 
 
     """ Train Log Dir """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tb_log_path = os.path.join("./logs_SRPO_critic_pretrain",
                                "{}".format(str(args.env_id)),
                                "{}".format(args.data_type),
-                               "tau{}_temp{}_dataset{}_{}_seed{}".format(args.tau, args.temp, args.dataset_num ,args.srpo_mode, args.seed))
+                               "tau{}_temp{}_dataset{}_{}_seed{}_{}".format(args.tau, args.temp, args.dataset_num, args.srpo_mode, args.seed, timestamp))
+    # 创建日志目录
+    os.makedirs(tb_log_path, exist_ok=True)
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """

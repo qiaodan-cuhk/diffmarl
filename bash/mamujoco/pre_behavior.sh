@@ -1,8 +1,8 @@
 #!/bin/sh
 
 # 在用seq去pretrain的时候，直接train的是agent1的条件分布，还需要用ind去train得到agent0的分布
-datatypes=("expert")  # "expert" "medium" "medium-replay" "random"
-dataset_seed=3    # 0 1 2 3 4
+datatypes=("random")  # "expert" "medium" "medium-replay" "random"
+dataset_seed=0    # 0 1 2 3 4
 mix=False
 
 ## algo selection

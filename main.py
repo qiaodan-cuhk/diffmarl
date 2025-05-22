@@ -48,7 +48,18 @@ def make_parallel_env(env_id, seed, discrete_action):
 
 # evaluate policy in eval module with envs(seed+100) on cpu
 """这里要检查一下mpe的逻辑"""
+"""新增收集eval policy数据"""
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
+
+    # 创建数据收集字典
+    collected_data = {
+        'obs': [],      # 观测
+        'actions': [],  # 动作
+        'rewards': [],  # 奖励
+        'episode_lens': [], # 每个episode的长度
+        'episode_returns': [] # 每个episode的累积奖励
+    }
+
     if env_name in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
@@ -58,6 +69,13 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
             env.reset()
             done = False
             episode_reward = 0.
+
+            # 新增：收集数据
+            episode_obs = []
+            episode_actions = []
+            episode_rewards = []
+
+
             while not done:
                 obs = env.get_obs()
                 # torch_obs = [Variable(torch.Tensor(obs[i]).unsqueeze(0), requires_grad=False) for i in range(agent.nagents)] 
@@ -69,11 +87,29 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 elif all(isinstance(item, np.ndarray) for item in torch_agent_actions):
                     agent_actions = torch_agent_actions
                 actions = [ac.squeeze(0) for ac in agent_actions]  # 变为 list[np, np, np]
+
+
+                # 收集数据
+                episode_obs.append([o.cpu().numpy() for o in torch_obs])
+                episode_actions.append(actions)
+
+
                 reward, done, info = env.step(actions)  
+
+                episode_rewards.append(reward)
+
                 episode_reward += reward
-            all_episodes_rewards.append(episode_reward)        
+            all_episodes_rewards.append(episode_reward)  
+
+            # 保存这个episode的数据
+            collected_data['obs'].append(episode_obs)
+            collected_data['actions'].append(episode_actions)
+            collected_data['rewards'].append(episode_rewards)
+            collected_data['episode_lens'].append(len(episode_obs))
+            collected_data['episode_returns'].append(episode_reward)  
+
         mean_episode_reward = np.mean(np.array(all_episodes_rewards))
-        return mean_episode_reward
+        return mean_episode_reward, collected_data
     elif env_name == 'bandit':
         env = ContinuousBanditEnv()
         
@@ -94,6 +130,14 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
             obs = env.reset()    # 修改过，返回的是list不再是array
             obs = np.array(obs)  # 处理返回的list形态reset数据
             agent.prep_rollouts(device=device)
+
+            # 新增：收集数据
+            episode_reward = 0
+            episode_obs = []
+            episode_actions = []
+            episode_rewards = []
+
+
             for et_i in range(config.episode_length):
                 obs_len = agent.nagents
                 if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
@@ -121,26 +165,49 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 
 
                 actions = [agent_actions]
+
+                # 收集数据
+                episode_obs.append([o.cpu().numpy() for o in torch_obs])
+                episode_actions.append(agent_actions)
+
+
                 next_obs, rewards, dones, infos = env.step(actions)
                 # 这里修改了MPE的原函数 utils/env_wrappers，返回的next obs是一个list而不是array
                 next_obs = np.array(next_obs)
                 
                 if env_name in ['simple_tag', 'simple_world']:
                     avg_predator_return += rewards[0][0]
+                    episode_rewards.append(rewards[0][0])
                 else:
                     avg_agent_reward = np.mean(rewards[0])
                     avg_predator_return += avg_agent_reward
+                    episode_rewards.append(avg_agent_reward)
 
                 obs = next_obs
+            
+            # 保存这个episode的数据
+            collected_data['obs'].append(episode_obs)
+            collected_data['actions'].append(episode_actions)
+            collected_data['rewards'].append(episode_rewards)
+            collected_data['episode_lens'].append(len(episode_obs))
+            collected_data['episode_returns'].append(episode_reward)
 
         avg_predator_return /= eval_episodes
-        return avg_predator_return
+        return avg_predator_return, collected_data
     elif env_name == 'simple_tag' or env_name == 'simple_world':
         avg_predator_return = 0.
         env = make_parallel_env(env_name, seed + 100, discrete_action)
         for ep_i in range(0, eval_episodes):
             obs = env.reset()    # 修改过，返回的是list不再是array
             agent.prep_rollouts(device=device)
+
+            # 新增：收集数据
+            episode_reward = 0
+            episode_obs = []
+            episode_actions = []
+            episode_rewards = []
+
+
             for et_i in range(config.episode_length):
                 obs_len = agent.nagents
                 if env_name in ['simple_tag', 'simple_world']:  # if predator-prey
@@ -170,18 +237,36 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 
 
                 actions = [agent_actions]
+
+                # 只收集predator的数据
+                episode_obs.append([o.cpu().numpy() for o in torch_obs[:agent.num_predators]])  # 只取predator的obs
+                episode_actions.append(agent_actions[:agent.num_predators])  # 只取predator的actions
+                
+
+
                 next_obs, rewards, dones, infos = env.step(actions)
                 
                 if env_name in ['simple_tag', 'simple_world']:
                     avg_predator_return += rewards[0][0]
+                    episode_reward += rewards[0][0]  # predator的reward
+                    episode_rewards.append(rewards[0][0])
                 else:
                     avg_agent_reward = np.mean(rewards[0])
                     avg_predator_return += avg_agent_reward
+                    episode_reward += avg_agent_reward  # predator的reward
+                    episode_rewards.append(avg_agent_reward)
 
                 obs = next_obs
 
+            # 保存这个episode的数据
+            collected_data['obs'].append(episode_obs)
+            collected_data['actions'].append(episode_actions)
+            collected_data['rewards'].append(episode_rewards)
+            collected_data['episode_lens'].append(len(episode_obs))
+            collected_data['episode_returns'].append(episode_reward)
+
         avg_predator_return /= eval_episodes
-        return avg_predator_return
+        return avg_predator_return, collected_data
 
 
 # log params to tensorboard
@@ -489,10 +574,21 @@ def offline_train(config):
         if t % config.eval_interval == 0 or t == config.num_steps:
             # eval_policy will set rollouts at start
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
-            eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
+            eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
+
+                # 保存评估数据
+                if t % config.save_buffer_interval == 0:
+                    data_save_path = os.path.join(outdir, f'eval_data_step_{t}.npz')
+                    np.savez(data_save_path, 
+                            obs=np.array(eval_data['obs']),
+                            actions=np.array(eval_data['actions']),
+                            rewards=np.array(eval_data['rewards']),
+                            episode_lens=np.array(eval_data['episode_lens']),
+                            episode_returns=np.array(eval_data['episode_returns']))
+                
             # when eval finished, switch to train()
             ma_agent.prep_training(device=config.device)
                 
@@ -644,6 +740,7 @@ if __name__ == '__main__':
         # config.num_steps = 200000
         # config.n_policy_epochs = 20
         config.eval_interval = 500
+        config.save_buffer_interval = 25000
         config.logging_interval = 500
         config.tau = 0.005
         config.gamma=0.99
