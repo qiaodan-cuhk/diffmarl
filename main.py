@@ -580,7 +580,7 @@ def offline_train(config):
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
 
                 # 保存评估数据
-                if t % config.save_buffer_interval == 0:
+                if t % config.save_buffer_interval == 0 and config.save_eval_buffer:
                     data_save_path = os.path.join(outdir, f'eval_data_step_{t}.npz')
                     np.savez(data_save_path, 
                             obs=np.array(eval_data['obs']),
@@ -708,6 +708,7 @@ if __name__ == '__main__':
     parser.add_argument('--regq', type=int, default=0)
     parser.add_argument('--iql_critic_lr', type=float, default=3e-4)
     ##################################################
+    parser.add_argument('--save_eval_buffer', action='store_true')
     
     config = parser.parse_args()
 
