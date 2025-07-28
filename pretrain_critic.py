@@ -1,8 +1,6 @@
 """ Pretrain joint Q(s,a) or advantage Q(s, a-i, ai) """
-# 需要确认的：
-# Line 335 需要增加 2ant 4ant env info
-# Line 125 的 next action 似乎没用，数据集也没有
-
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
 import numpy as np
@@ -395,13 +393,13 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
         if args.save_model and epoch_loss < best_loss:
             best_loss = epoch_loss
             print("New lowest loss in epoch {}, Save best models".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}", "best_critic.pth"))
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}_tau{args.tau}_temp{args.temp}", "best_critic.pth"))
             # /data/qiaodan/code/diffmarl/pretrain/omiga/env_id_level_seed_JAL/best_critic.pth
 
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}", "critic_epoch{}.pth".format(epoch)))
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}_tau{args.tau}_temp{args.temp}", "critic_epoch{}.pth".format(epoch)))
             # /data/qiaodan/code/diffmarl/pretrain/omiga/env_id_level_seed_JAL/critic_150.pth
 
 
@@ -518,8 +516,8 @@ def critic(args):
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
-    if not os.path.exists(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}")):
-        os.makedirs(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}"))
+    if not os.path.exists(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}_tau{args.tau}_temp{args.temp}")):
+        os.makedirs(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}_tau{args.tau}_temp{args.temp}"))
 
 
     if args.srpo_mode == 'IND':
@@ -539,7 +537,7 @@ def pretrain_critic_args():
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
     parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
-    parser.add_argument("--data_type", default='medium', type=str)  # expert, medium-expert, medium, medium-replay
+    parser.add_argument("--data_type", default='medium-expert', type=str)  # expert, medium-expert, medium, medium-replay
     # parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
@@ -548,18 +546,18 @@ def pretrain_critic_args():
     # params for networks
     # parser.add_argument("--actor_blocks", default=2, type=int)   # 在IQL中用不到，只在diffusion中用到scorenet IDQL
     parser.add_argument("--q_layer", default=2, type=int)   # q_layer 是 IQL 中 TwinQ critic 的层数 
-    parser.add_argument("--batch_size", default=512, type=int)
+    parser.add_argument("--batch_size", default=1024, type=int)
     # params for buffer and data
     parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到62500
+    parser.add_argument("--buffer_length", default=int(2e6), type=int)   # omar数据集mamujoco和mpe都是1e6数据量，medium replay会少一些到62500
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
     parser.add_argument("--iql_critic_lr", default=3e-4, type=float)
 
     # training/eval epochs
     parser.add_argument("--training_epoch", default=200, type=int)              # 训练epoch
-    parser.add_argument("--training_steps_per_epoch", default=10000, type=int)   # 每个epoch训练steps
+    parser.add_argument("--training_steps_per_epoch", default=5000, type=int)   # 每个epoch训练steps
     parser.add_argument("--eval_interval", default=5, type=int)
     parser.add_argument("--save_interval", default=20, type=int)
 
