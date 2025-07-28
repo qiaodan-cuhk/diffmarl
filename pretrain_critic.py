@@ -1,7 +1,4 @@
 """ Pretrain joint Q(s,a) or advantage Q(s, a-i, ai) """
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
 import os
 import numpy as np
 import torch
@@ -49,7 +46,6 @@ def make_parallel_env(env_id, seed, discrete_action):
     return DummyVecEnv([get_env_fn(0)])
 
 
-# === todo: 要检查新环境怎么进行step等操作 === 
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None, args=None):
     # 只用来跑OMIGA的6-agent
     if env_name in ['HalfCheetah-v2']:
@@ -572,7 +568,6 @@ def pretrain_critic_args():
 
 
     # 只用于 mamujoco
-    # 需要增加 2ant 4ant
     if config.env_id == "HalfCheetah-v2":      
         config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
     elif config.env_id == "2-ant":

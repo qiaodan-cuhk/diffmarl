@@ -13,6 +13,7 @@ datasets/
 logs_SRPO_diffusion_pretrain/
 logs_SRPO_critic_pretrain/
 Critic_Logs/
+Diffusion_Logs/
 pretrain/
 results/
 
