@@ -3,7 +3,7 @@ from torch import Tensor
 from torch.autograd import Variable
 import torch
 import math
-
+import h5py
 # halfcheetah medium replay 46w 数据
 # simple spread mid replay 97500
 # simple tag mid replay 62500
@@ -132,6 +132,65 @@ class ReplayBuffer(object):
 
                 self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / (num_experiences/episode_length)  # 根据main.py, MPE episode length eval is 25
                 self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+         
+        self.filled_i = num_experiences
+        self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
+
+
+    def load_batch_data_omiga(self, dir, rew_scale=1.0):
+        print ('\033[1;33mloading batch data from {}...\033[1;0m'.format(dir))
+        # dir = /data/qiaodan/code/diffmarl/datasets/omiga/HalfCheetah-v2-6x1-expert.hdf5
+
+        f = h5py.File(dir, 'r')
+        s = np.array(f['s'])
+        o = np.array(f['o'])
+        a = np.array(f['a'])
+        r = np.array(f['r'])
+        d = np.array(f['d'])
+        f.close()
+
+        # 只保留非终止步
+        data_size = s.shape[0]
+        nonterminal_steps, = np.where(
+            np.logical_and(
+                np.logical_not(d[:,0]),
+                np.arange(data_size) < data_size - 1))
+        print('Found %d non-terminal steps out of a total of %d steps.' % (
+            len(nonterminal_steps), data_size))
+
+
+
+        curr_obs = o[nonterminal_steps]
+        curr_states = s[nonterminal_steps]  # [1e6, 6, 23]
+        curr_acs = a[nonterminal_steps]     # [1e6, 6, 1]
+        curr_rews = r[nonterminal_steps].reshape(-1, 1)            # [1e6,1]
+        curr_dones = d[nonterminal_steps + 1].reshape(-1, 1)   # [1e6,1]
+        curr_next_obs = o[nonterminal_steps + 1]
+        curr_next_states = s[nonterminal_steps + 1]
+        # curr_next_acs = a[nonterminal_steps + 1]
+
+
+        num_experiences = curr_obs.shape[0] # 数据数量
+
+
+
+
+        for i in range(self.num_agents):
+
+
+
+            self.obs_buffs[i][:num_experiences] = curr_obs[:,i,:]
+            self.ac_buffs[i][:num_experiences] = curr_acs[:,i,:]
+            self.rew_buffs[i][:num_experiences] = curr_rews.flatten() * rew_scale
+            self.next_obs_buffs[i][:num_experiences] = curr_next_obs[:,i,:]
+
+            if self.is_mamujoco:
+                self.done_buffs[i][:num_experiences] = curr_dones.flatten()
+                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / np.sum(self.done_buffs[i][:num_experiences])
+                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+                # mamujoco 额外状态信息，但实际上训练并不需要state
+                self.state_buffs[i][:num_experiences] = curr_states[:,i,:]
+                self.next_state_buffs[i][:num_experiences] = curr_next_states[:,i,:]
          
         self.filled_i = num_experiences
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences

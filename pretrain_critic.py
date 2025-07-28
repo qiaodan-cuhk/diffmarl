@@ -12,21 +12,31 @@ import argparse
 from datetime import datetime
 from gym.spaces import Box, Discrete
 from utils.buffer import ReplayBuffer
+
+# MPE env
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
+from utils.agents import DDPGAgent
+
 from torch.utils.tensorboard import SummaryWriter
 from torch.autograd import Variable
 
 
 # IQL algo and prey agents
 from algorithms.SRPO import MASRPO_IQL
-from utils.agents import DDPGAgent
+
 
 # MAMujoco
+# try:
+#     from envs.multiagent_mujoco.mujoco_multi import MujocoMulti
+# except:
+#     print ('MujocoMulti not installed')
+
+# OMIGA
 try:
-    from multiagent_mujoco.mujoco_multi import MujocoMulti
+    from envs.ma_mujoco.multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
-    print ('MujocoMulti not installed')
+    print ('OMIGA MujocoMulti not installed')
 
 # bandit
 from bandit import ContinuousBanditEnv
@@ -41,7 +51,9 @@ def make_parallel_env(env_id, seed, discrete_action):
     return DummyVecEnv([get_env_fn(0)])
 
 
+# === todo: 要检查新环境怎么进行step等操作 === 
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None, args=None):
+    # 只用来跑OMIGA的6-agent
     if env_name in ['HalfCheetah-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
@@ -58,17 +70,16 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
 
                 with torch.no_grad():  # 添加这行，在评估时不需要计算梯度
                     actions = agent.deter_policy.select_actions(concat_obs)  # [n]
-                # actions = agent.deter_policy.select_actions(concat_obs)  # [n]
-
 
                 if torch.is_tensor(actions):
                     # actions = actions.cpu().numpy()
                     actions = actions.detach().cpu().numpy()
                 # 解开concatenated动作
                 split_actions = np.split(actions, len(obs), axis=1)
-                # 执行动作
-                reward, done, info = env.step([a.squeeze(0) for a in split_actions])
-                episode_reward += reward
+                # 执行动作, omiga wrapper 返回 get_obs, get_state, rewards, dones, info, avaliable_actions
+                new_obs, new_state, rewards, dones, info, avaliable_actions = env.step([a.squeeze(0) for a in split_actions])
+                done = dones[0]
+                episode_reward += rewards[0][0].item()
 
             all_episodes_rewards.append(episode_reward)        
         mean_episode_reward = np.mean(np.array(all_episodes_rewards))
@@ -175,6 +186,7 @@ def get_grad_norm(parameters):
 
 # Q(s, a_i)
 # 有个问题是，当前模式是依次训练完毕每个agent，无法做eval rewards
+# === todo: 需要修改如何eval ind训练的IQL === 
 def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, start_epoch=0):
     n_epochs = args.training_epoch   # 200
     epoch_steps = args.training_steps_per_epoch  # mujoco默认10000，mpe缩小到1000
@@ -227,13 +239,14 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
         if args.save_model and epoch_loss < best_loss:
             best_loss = epoch_loss
             print("New lowest critic loss in epoch {}, Save models".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "best_critic_{}.pth".format(agent_num)))
-            # SRPO_premodels/env_id/IND/best_critic_i.pth
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain", f"{args.env_id}_{args.data_type}_seed{args.seed}", "IND", "best_critic_{}.pth".format(agent_num)))
+            # /data/qiaodan/code/diffmarl/pretrain/env_id/IND/best_critic_i.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save critic models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
-            # SRPO_premodels/env_id_level/IND/critic_1_epoch150.pth
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain", f"{args.env_id}_{args.data_type}_seed{args.seed}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
+            # /data/qiaodan/code/diffmarl/pretrain/env_id_level/IND/critic_1_epoch150.pth
+
 
 
 
@@ -246,6 +259,7 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
 
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs, leave=True, colour='green', dynamic_ncols=True)
     best_loss = 1e5
+
 
     if env_id in ['simple_tag', 'simple_world']:
         adv_init_params = [
@@ -270,24 +284,51 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
         avg_bc_loss = 0.
         num_items = 0
 
+        # eval before training
+        if (epoch % 5 == 4) or epoch==0:
+            # mean, std = eval_policy(score_model.deter_policy.select_actions, args.env,00)
+            # 设定 args.eval_episodes 为 10，评估10个episodes再取平均
+            mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device=args.device, env_args=args.env_args, args=args_prey)
+            # mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args, args=args_prey)  # MPE环境
+            writer.add_scalar("eval/reward", mean_episode_reward, epoch+1)
+            score_model.deter_policy.to(args.device)
+
         for step_in_epoch in range(epoch_steps):
             data = data_loader.sample(args.batch_size, to_gpu=args.use_gpu)
-
+            # agent_num = len(data)
             # we need to concate marl datasets with [{}, {}] into one dict
-            # used for 2 halfcheetah
-
+            # === OMIGA 的6-agent数据 ===
             if env_id in ['HalfCheetah-v2', '2-ant']:   # '4-ant'
-                d0 = data[0]
-                d1 = data[1]
                 data_concate = {}
-                for item in ["obs", "action", "next_obs", "next_action"]:
-                    data_concate[item] = torch.cat((d0[item], d1[item]), dim=1).to(args.device)
+                # 需要concate的字段（每个智能体都有独立的数据）
+                concate_fields = ["obs", "action", "next_obs", "next_action"]
+
+                for item in concate_fields:
+                    # 收集所有智能体的数据
+                    agent_data_list = []
+                    for agent_data in data:
+                        agent_data_list.append(agent_data[item])
+                    
+                    # 在dim=1维度上concate所有智能体的数据
+                    data_concate[item] = torch.cat(agent_data_list, dim=1).to(args.device)
                     assert data_concate[item].size()[0] == args.batch_size
-                # 以下内容不需要concate
-                data_concate["state"] = d0["state"].to(args.device)
-                data_concate["next_state"] = d0["next_state"].to(args.device)
-                data_concate["rewards"] = d0["rewards"].to(args.device)
-                data_concate["done"] = d0["done"].to(args.device)
+
+                # 以下内容不需要concate（所有智能体共享相同的数据）
+                shared_fields = ["state", "next_state", "rewards", "done"]
+                for item in shared_fields:
+                    data_concate[item] = data[0][item].to(args.device)
+
+                # d0 = data[0]
+                # d1 = data[1]
+                
+                # for item in ["obs", "action", "next_obs", "next_action"]:
+                #     data_concate[item] = torch.cat((d0[item], d1[item]), dim=1).to(args.device)
+                #     assert data_concate[item].size()[0] == args.batch_size
+                # # 以下内容不需要concate
+                # data_concate["state"] = d0["state"].to(args.device)
+                # data_concate["next_state"] = d0["next_state"].to(args.device)
+                # data_concate["rewards"] = d0["rewards"].to(args.device)
+                # data_concate["done"] = d0["done"].to(args.device)
             elif env_id in ['simple_spread', 'simple_tag', 'simple_world']:
                 # Only concatenate data for the first num_agents as predator args.predator_nums
                 data_concate = {
@@ -298,6 +339,7 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
                     "done": data[0]["done"].to(args.device)
                 }
 
+            # === 这里要小心维度如何影响更新 ===
             loss_policy, loss_bc = score_model.update_iql(data_concate)
 
             avg_critic_loss += loss_policy.detach().cpu().numpy()
@@ -313,13 +355,7 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
         """ Log by tensorboard """
         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
 
-            if (epoch % 5 == 4) or epoch==0:
-                # mean, std = eval_policy(score_model.deter_policy.select_actions, args.env,00)
-                # 设定 args.eval_episodes 为 10，评估10个episodes再取平均
-                mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device=args.device, env_args=args.env_args, args=args_prey)
-                # mean_episode_reward = eval_policy(score_model, args.env_id, args.seed, 10, args.discrete_action, device='cpu', env_args=args.env_args, args=args_prey)  # MPE环境
-                writer.add_scalar("eval/reward", mean_episode_reward, epoch+1)
-                score_model.deter_policy.to(args.device)
+            
 
             writer.add_scalar("JAL/v_loss", score_model.q[0].v_loss.detach().cpu().numpy(), epoch+1)
             writer.add_scalar("JAL/q_loss", score_model.q[0].q_loss.detach().cpu().numpy(), epoch+1)
@@ -359,32 +395,28 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
         if args.save_model and epoch_loss < best_loss:
             best_loss = epoch_loss
             print("New lowest loss in epoch {}, Save best models".format(epoch))
-            if args.mixed_data:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, "JAL", "best_critic.pth"))
-            else:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "best_critic.pth"))
-                # SRPO_premodels/env_id_level/JAL/best_critic.pth
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}", "best_critic.pth"))
+            # /data/qiaodan/code/diffmarl/pretrain/omiga/env_id_level_seed_JAL/best_critic.pth
+
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save models: Epoch {}".format(epoch))
-            if args.mixed_data:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, "JAL", "critic_epoch{}.pth".format(epoch)))
-            else:
-                torch.save(score_model.q[0].state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "JAL", "critic_epoch{}.pth".format(epoch)))
-            # SRPO_premodels/env_id_level/JAL/critic_150.pth
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}", "critic_epoch{}.pth".format(epoch)))
+            # /data/qiaodan/code/diffmarl/pretrain/omiga/env_id_level_seed_JAL/critic_150.pth
 
 
 def critic(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    # 要添加 2ant 4ant
+    # 只考虑6-agent halfcheetah
     if args.env_id in ['HalfCheetah-v2']:
-        env_args = {"scenario": args.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+        env_args = {"scenario": args.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+        # OMIGA 设置 6x1 和 obsk 1
         env = MujocoMulti(env_args=env_args)
         args.env_args = env_args
         env.seed(args.seed + 100)
-        env_info = env.get_env_info()
+        env_info = env.get_env_info()  # omiga state 23, obs 23, n_agents 6, normalise action False
     elif args.env_id == 'bandit':
         env = ContinuousBanditEnv()
         env_info = env.env_info
@@ -396,7 +428,7 @@ def critic(args):
         print("Env not in MaMujoco, bandit, MPE")
 
 
-
+    # === 这里要小心维度如何影响更新 ===
     if args.env_id in ['HalfCheetah-v2', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
@@ -405,6 +437,7 @@ def critic(args):
         agent_num = len(each_action_shape) 
         state_dim = each_obs_shape[0]
         action_dim = each_action_shape[0]
+        # state dim 23, obs 23, n_agents 6, action dim 1
     elif args.env_id in ['simple_spread']:
         each_state_shape = [obsp.shape[0] for obsp in env.observation_space]
         each_action_shape = [acsp.shape[0] for acsp in env.action_space]
@@ -436,6 +469,7 @@ def critic(args):
         args.prey_action_dim = prey_action_shape
         
 
+    # === 这里注意输入和输出的dim === 
     if args.srpo_mode == 'IND':
         score_model= [MASRPO_IQL(input_dim=state_dim+action_dim,
                                  output_dim=action_dim,
@@ -447,7 +481,9 @@ def critic(args):
                                 output_dim=action_dim*agent_num,
                                 args=args).to(args.device)
         score_model.q[0].to(args.device)
-        # Input is concated obs
+        # Input is concated obs, and concated actions
+        # OMIGA 输入是 23 state + 1 action * 6 agents = 144
+        # Value Func输入是138
 
 
     # Load Buffer
@@ -465,25 +501,25 @@ def critic(args):
                                      each_state_shape,
                                      [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space],
                                      device = args.device)
-    replay_buffer.load_batch_data(args.dataset_dir, rew_scale=args.rew_scale)
+        
+    # === 这里要处理成先load omiga offline dataset，再转换为replay buffer结构 ===
+    # replay_buffer.load_batch_data(args.dataset_dir, rew_scale=args.rew_scale)
+    replay_buffer.load_batch_data_omiga(args.dataset_dir, rew_scale=args.rew_scale)
 
 
     """ Train Log Dir """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tb_log_path = os.path.join("./logs_SRPO_critic_pretrain",
+    tb_log_path = os.path.join("/data/qiaodan/code/diffmarl/Critic_Logs",
                                "{}".format(str(args.env_id)),
                                "{}".format(args.data_type),
-                               "tau{}_temp{}_dataset{}_{}_seed{}_{}".format(args.tau, args.temp, args.dataset_num, args.srpo_mode, args.seed, timestamp))
+                               "tau{}_temp{}_{}_seed{}_{}".format(args.tau, args.temp, args.srpo_mode, args.seed, timestamp))
     # 创建日志目录
     os.makedirs(tb_log_path, exist_ok=True)
     writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
-    if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode)):
-        os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", args.srpo_mode))
-    if args.mixed_data:
-        if not os.path.exists(os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, args.srpo_mode)):
-            os.makedirs(os.path.join("./SRPO_premodels", f"{args.env_id}_mix", args.data_type, args.srpo_mode))
+    if not os.path.exists(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}")):
+        os.makedirs(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_seed{args.seed}_{args.srpo_mode}"))
 
 
     if args.srpo_mode == 'IND':
@@ -502,12 +538,12 @@ def pretrain_critic_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_spread', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
-    parser.add_argument("--data_type", default='medium', type=str)
-    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")  # HalfCheetah-v2 / bandit 
+    parser.add_argument("--data_type", default='medium', type=str)  # expert, medium-expert, medium, medium-replay
+    # parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     # train mode
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--device", default=0, type=int, help='cuda number')
+    parser.add_argument("--device", default=5, type=int, help='cuda number')
     parser.add_argument("--srpo_mode", default='JAL', type=str)   # IND 或者 JAL
     # params for networks
     # parser.add_argument("--actor_blocks", default=2, type=int)   # 在IQL中用不到，只在diffusion中用到scorenet IDQL
@@ -529,8 +565,6 @@ def pretrain_critic_args():
 
     # MPE, default False = continuous，如果命令行不指定，则采用默认值，如果指定了，采用True
     parser.add_argument("--discrete_action", action='store_true', default=False)
-    # mixed datasets
-    parser.add_argument("--mixed_data", action='store_true', default=False)
 
     # SRPO 参数
     parser.add_argument("--tau", default=0.7, type=float)
@@ -542,19 +576,15 @@ def pretrain_critic_args():
     # 只用于 mamujoco
     # 需要增加 2ant 4ant
     if config.env_id == "HalfCheetah-v2":      
-        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
     elif config.env_id == "2-ant":
         config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}  # 需要更新确认
 
 
     # combine dir
-    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-        if config.mixed_data:
-            config.dataset_dir = '/data/qiaodan/code/diffmarl/datasets/mix_hc' + '/' + config.data_type + '/' + 'mixed_data'
-        else:
-            config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
-    elif config.env_id == 'bandit':
-        config.dataset_dir = config.dataset_dir + '/bandit'
+    if config.env_id in ['HalfCheetah-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
+
 
 
     if config.use_gpu:
