@@ -60,7 +60,7 @@ class ReplayBuffer(object):
             cast = lambda x: Variable(Tensor(x), requires_grad=False).cpu()
 
         bf = []
-
+        # mamujoco加载state，但是训练critic和behavior都使用obs
         if self.is_mamujoco:
             for i in range(self.num_agents):                
                 agent_data = {"state": cast(self.state_buffs[i][inds]),
