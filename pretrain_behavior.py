@@ -172,20 +172,19 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
                 writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
                 writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
                 # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
-
+            
             """ Save models """
             if args.save_model and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 print("New lowest loss in epoch {}, Save best models".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
                 # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
             
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
     elif agent_num > 0:
-
         for epoch in tqdm_epoch:
             avg_loss = 0.
             num_items = 0

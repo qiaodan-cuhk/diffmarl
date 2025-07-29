@@ -24,11 +24,17 @@ from utils.make_env import make_env
 from utils.buffer import ReplayBuffer
 from utils.env_wrappers import DummyVecEnv
 
-# env check
+# # env check
+# try:
+#     from multiagent_mujoco.mujoco_multi import MujocoMulti
+# except:
+#     print ('MujocoMulti not installed')
+
+# OMIGA
 try:
-    from multiagent_mujoco.mujoco_multi import MujocoMulti
+    from envs.ma_mujoco.multiagent_mujoco.mujoco_multi import MujocoMulti
 except:
-    print ('MujocoMulti not installed')
+    print ('OMIGA MujocoMulti not installed')
 
 from bandit import ContinuousBanditEnv
 
@@ -94,11 +100,16 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
                 episode_actions.append(actions)
 
 
-                reward, done, info = env.step(actions)  
+                # reward, done, info = env.step(actions)  
+                # omiga wrapper 
+                # 目前是 [array array array]
+                new_obs, new_state, rewards, dones, info, avaliable_actions = env.step(actions)
+                done = dones[0]
+                episode_reward += rewards[0][0].item()
 
-                episode_rewards.append(reward)
+                episode_rewards.append(rewards[0][0].item())
 
-                episode_reward += reward
+                # episode_reward += reward
             all_episodes_rewards.append(episode_reward)  
 
             # 保存这个episode的数据
@@ -305,9 +316,9 @@ def load_SRPO_critic(srpo_model, load_path, srpo_type, epoch_num):
             for srpo_i in srpo_model.agents:
                 # SRPO_premodels/exp_seed/JAL/best_critic  每个agent都有一个central Q，共享
                 if epoch_num == 'best':
-                    load_path_i = os.path.join(load_path, 'JAL', f'best_critic.pth')
+                    load_path_i = os.path.join(load_path, 'critic', f'best_critic.pth')
                 else:
-                    load_path_i = os.path.join(load_path, 'JAL', f'critic_epoch{epoch_num}.pth')
+                    load_path_i = os.path.join(load_path, 'critic', f'critic_epoch{epoch_num}.pth')
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.q[0].load_state_dict(ckpt)
 
@@ -331,11 +342,11 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type, epoch_num):
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'SEQ':
             for agent_index, srpo_i in enumerate(srpo_model.agents):
-                # SRPO_premodels/exp_seed/Seq/best_diffusion_i.pth
+                # SRPO_premodels/exp_seed/diffusion/best_diffusion_i.pth
                 if epoch_num == 'best':
-                    load_path_i = os.path.join(load_path, 'Seq', f'best_diffusion_{agent_index}.pth')
+                    load_path_i = os.path.join(load_path, 'diffusion', f'best_diffusion_agent{agent_index}.pth')
                 else:
-                    load_path_i = os.path.join(load_path, 'Seq', f'diffusion_{agent_index}_epoch{epoch_num}.pth')    
+                    load_path_i = os.path.join(load_path, 'diffusion', f'diffusion_agent{agent_index}_epoch{epoch_num}.pth')    
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
@@ -355,7 +366,7 @@ def offline_train(config):
     # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
-        outdir = os.path.join(config.dir, "nips", config.env_id, unique_token)
+        outdir = os.path.join(config.dir, "omiga", config.env_id, unique_token)
         os.makedirs(outdir)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     
@@ -377,7 +388,7 @@ def offline_train(config):
         env = ContinuousBanditEnv()
         env_args, env_info = None, None
     else:
-        env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+        env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
         env = MujocoMulti(env_args=env_args)
         env.seed(config.seed)
         env_info = env.get_env_info()
@@ -520,7 +531,8 @@ def offline_train(config):
             is_mamujoco=True,
             state_dims=[env_info['state_shape'] for _ in env.observation_space], device = config.device
         )
-    replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
+    # replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
+    replay_buffer.load_batch_data_omiga(config.dataset_dir, rew_scale = config.rew_scale)
 
     if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale; 应该是主要用于MPE环境
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
@@ -531,7 +543,7 @@ def offline_train(config):
         # configure(outdir)
         writer = SummaryWriter(outdir)
         config_log_dict = {"env": config.env_id,
-                           "dataset": "{}_{}".format(config.data_type, config.dataset_num),
+                           "dataset": "{}".format(config.data_type),
                            "dataset_ave_reward": replay_buffer.ave_reward,
                            "algo": algo_name,
                            "seed": config.seed,
@@ -630,16 +642,16 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_world', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
     parser.add_argument("--data_type", default='expert', type=str)
-    parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
+    # parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
     parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ
-    parser.add_argument("--diff_epoch", default=149)  # 49,99,149
-    parser.add_argument("--critic_epoch", default=79)  # 19,39,59,79,99,119,139,159,179,199
+    parser.add_argument("--diff_epoch", default=159)  # 49,99,149
+    parser.add_argument("--critic_epoch", default=179)  # 19,39,59,79,99,119,139,159,179,199
 
 
     # Set diffusion params
@@ -659,7 +671,7 @@ if __name__ == '__main__':
     parser.add_argument("--discrete_action", action='store_true', default=False)
     
     # params for buffer and data
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)
+    parser.add_argument("--buffer_length", default=int(2e6), type=int)
     parser.add_argument("--episode_length", default=25, type=int, help='MPE epi_length is 25, MAMuJoCo epi_length is 1000')
     parser.add_argument("--steps_per_update", default=100, type=int)   # 似乎没用
     parser.add_argument("--hidden_dim", default=64, type=int)  # DDPG hidden dim
@@ -687,7 +699,7 @@ if __name__ == '__main__':
 
     # regularization para
     parser.add_argument('--beta', type=float, default=0.01)  
-    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')
+    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/pretrain/omiga/')
     # parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')  # HalfCheetah-v2_expert
     # parser.add_argument('--diffusion_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
@@ -731,8 +743,8 @@ if __name__ == '__main__':
     
     # dataset premodel path
     if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
-        config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
+        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
+        config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
 
 
     # make envs params
@@ -760,6 +772,7 @@ if __name__ == '__main__':
         # config.num_steps = int(1e6)
         config.steps_per_update = 10 # 也没用
         config.eval_interval = 5000
+        config.save_buffer_interval = 25000
         config.logging_interval = 5000
         config.episode_length = 1000
         config.gamma=0.99
@@ -770,21 +783,16 @@ if __name__ == '__main__':
         config.T=20
         # control Diffusion-QL, dont control SRPO
 
-    if config.env_id == "bandit":
-        config.dataset_dir = config.dataset_dir + '/' + config.env_id
-    else:        
-        config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
+    # if config.env_id == "bandit":
+    #     config.dataset_dir = config.dataset_dir + '/' + config.env_id
+    # else:        
+    #     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
+
+    # combine dir
+    if config.env_id in ['HalfCheetah-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
 
     offline_train(config) 
-
-    
-    # 使用 sweep_config 创建一个 sweep
-    # sweep_id = wandb.sweep(sweep_config, project="HalfCheetah_{}".format(config.data_type))
-
-    # config.beta = sweep_id.config.beta
-
-    # # 使用 sweep_id 启动 sweep 的执行，并传入 train_with_config 函数
-    # wandb.agent(sweep_id,  offline_train, count=10)
 
 
     
