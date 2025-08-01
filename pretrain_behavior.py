@@ -14,6 +14,8 @@ from utils.buffer import ReplayBuffer
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
 
+
+
 # try:
 #     from multiagent_mujoco.mujoco_multi import MujocoMulti
 # except:
@@ -324,8 +326,10 @@ def behavior(args):
             [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
         )
 
+
     # replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
     replay_buffer.load_batch_data_omiga(args.dataset_dir, rew_scale=args.rew_scale)
+
 
     """ Train Log Dir """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

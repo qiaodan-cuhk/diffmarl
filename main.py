@@ -689,7 +689,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_interval', default=10000, type=int)
 
     # training steps
-    parser.add_argument('--num_steps', default=int(1e6), type=int)
+    parser.add_argument('--num_steps', default=int(5e5), type=int)
 
     # params for logging
     parser.add_argument("--logging_interval", default=500, type=int)

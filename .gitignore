@@ -5,9 +5,9 @@ __pycache__/
 
 # models and logs and datasets
 outputs/
-
-results/*
-!results/nips
+.idea/
+results/
+# !results/nips
 
 datasets/
 logs_SRPO_diffusion_pretrain/
@@ -16,6 +16,7 @@ Critic_Logs/
 Diffusion_Logs/
 pretrain/
 results/
+bash/
 
 SRPO_premodels/
 # !SRPO_premodels/simple_spread_expert_seed0
