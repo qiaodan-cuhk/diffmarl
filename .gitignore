@@ -17,6 +17,7 @@ Diffusion_Logs/
 pretrain/
 results/
 bash/
+upload_ckpts/
 
 SRPO_premodels/
 # !SRPO_premodels/simple_spread_expert_seed0

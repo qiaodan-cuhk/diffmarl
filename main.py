@@ -66,7 +66,7 @@ def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='c
         'episode_returns': [] # 每个episode的累积奖励
     }
 
-    if env_name in ['HalfCheetah-v2']:
+    if env_name in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
         all_episodes_rewards = []
@@ -388,15 +388,16 @@ def offline_train(config):
         env = ContinuousBanditEnv()
         env_args, env_info = None, None
     else:
-        env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
-        env = MujocoMulti(env_args=env_args)
+        # env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+        print(config.env_args)
+        env = MujocoMulti(env_args=config.env_args)
         env.seed(config.seed)
         env_info = env.get_env_info()
 
 
     """参考pretrain，Jan.30 考虑新增"""
     # 创建score model和load buffer时用得到
-    if config.env_id in ['HalfCheetah-v2', 'bandit']:
+    if config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
         each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
@@ -586,7 +587,7 @@ def offline_train(config):
         if t % config.eval_interval == 0 or t == config.num_steps:
             # eval_policy will set rollouts at start
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
-            eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
+            eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=config.env_args)
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
@@ -611,7 +612,7 @@ def offline_train(config):
             # 这里一个可能的问题是，JAL需不需要区分pray的数据
             # Jan 30回答：需要区分，simple tag/world的数据给了3号agent作为pray的数据，要丢掉
         elif config.marltype == "IND":
-            nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'bandit'] else ma_agent.num_predators
+            nagents = ma_agent.nagents if config.env_id in ['simple_spread', 'HalfCheetah-v2', 'Hopper-v2', 'Ant-v2', 'bandit'] else ma_agent.num_predators
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             # 只拿agent i自己的buffer，并只更新a i策略
             for a_i in range(nagents):
@@ -724,11 +725,11 @@ if __name__ == '__main__':
     
     config = parser.parse_args()
 
-    temperature_coefficients = {"simple_spread": 0.08,
-                            "HalfCheetah-v2": 0.02,
-                            "bandit": 0.02}
-    if config.beta is None:
-        config.beta = temperature_coefficients[config.env_id]
+    # temperature_coefficients = {"simple_spread": 0.08,
+    #                         "HalfCheetah-v2": 0.02,
+    #                         "bandit": 0.02}
+    # if config.beta is None:
+    #     config.beta = temperature_coefficients[config.env_id]
 
     if config.policy_layer is None:
         config.policy_layer=4 if "maze" in config.env_id else 2
@@ -742,7 +743,7 @@ if __name__ == '__main__':
         config.device = "cpu"
     
     # dataset premodel path
-    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
+    if config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2', 'simple_spread', 'simple_tag', 'simple_world']:
         config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
         config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
 
@@ -788,9 +789,21 @@ if __name__ == '__main__':
     # else:        
     #     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
 
+    # 只用于omiga
+    if config.env_id == "HalfCheetah-v2":      
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+    elif config.env_id == "Ant-v2":
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x4', "agent_obsk": 1,}  # 需要更新确认
+    elif config.env_id == "Hopper-v2":
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '3x1', "agent_obsk": 1,} 
+
     # combine dir
     if config.env_id in ['HalfCheetah-v2']:
         config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
+    elif config.env_id in ['Ant-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-2x4-{config.data_type}.hdf5"
+    elif config.env_id in ['Hopper-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-3x1-{config.data_type}.hdf5"
 
     offline_train(config) 
 

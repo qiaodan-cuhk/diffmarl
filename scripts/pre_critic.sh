@@ -1,21 +1,12 @@
 #!/bin/sh
-datatypes=("expert" "medium-replay" "medium-expert")  # "expert" "medium" "medium-replay" "random"
-
-# optimal param
-# expert: tau=0.7, temp=3,5,7
-# medium-replay: tau=0.7/0.9, temp=3/7
-# medium-expert: tau=0.5, temp=5/7 
-# medium: tau=0.5, temp=0.5
-# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "expert" --device 5 --tau 0.7 --temp 7
-# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium-replay" --device 5 --tau 0.7 --temp 7
-# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium-expert" --device 5 --tau 0.5 --temp 7
-# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium" --device 5 --tau 0.7 --temp 7
-
 
 ## algo selection
 marltype="JAL"      # Can train JAL, IND, CTDE    seq使用ctde/jal critic
-TASK="HalfCheetah-v2"
-devices=(5)  # 可用的GPU设备列表
+
+# configs
+datatypes=("medium-replay")  # "expert" "medium" "medium-replay" "medium-expert"
+TASK="Hopper-v2"   # Ant-v2, Hopper-v2
+devices=(1 2 3 4 5)  # 可用的GPU设备列表
 
 # 添加tau和temp的搜索范围
 tau_values=(0.5 0.7 0.9)
@@ -24,8 +15,6 @@ temp_values=(0.5 1.0 3.0 5.0 7.0)
 # 初始化计数器
 counter=0
 total_devices=${#devices[@]}
-
-# if train on mixed data: --mixed_data
 
 for types in "${datatypes[@]}"
 do
@@ -50,3 +39,19 @@ done
 wait
 
 
+
+
+# optimal param
+# === HalfCheetah-v2 ===
+# expert: tau=0.7, temp=3,5,7
+# medium-replay: tau=0.7/0.9, temp=3/7
+# medium-expert: tau=0.5, temp=5/7 
+# medium: tau=0.5, temp=0.5
+# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "expert" --device 5 --tau 0.7 --temp 7
+# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium-replay" --device 5 --tau 0.7 --temp 7
+# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium-expert" --device 5 --tau 0.5 --temp 7
+# python /data/qiaodan/code/diffmarl/pretrain_critic.py --data_type "medium" --device 5 --tau 0.7 --temp 7
+
+# === Ant-v2 ===
+
+# === Hopper-v3 ===

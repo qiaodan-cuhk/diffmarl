@@ -1,12 +1,12 @@
 #!/bin/sh
 
-datatypes=("medium")  # "expert" "medium" "medium-replay" "medium-expert"
+datatypes=("expert" "medium" "medium-replay" "medium-expert")  # "expert" "medium" "medium-replay" "medium-expert"
 
 ## algo selection
 marltype="Seq"      # default Seq (sequential score function), can train JAL, IND for ablation
-TASK="HalfCheetah-v2"
-devices=(1 2 3 4)  # devices id
-agent_idx=(0 1 2 3 4 5) # trained agent id numbers, used for parallel training 
+TASK="Hopper-v2"
+devices=(2 3 4 5)  # devices id
+agent_idx=(0 1 2) # trained agent id numbers, used for parallel training 
 
 
 counter=0

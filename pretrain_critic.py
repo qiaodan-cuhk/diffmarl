@@ -48,7 +48,7 @@ def make_parallel_env(env_id, seed, discrete_action):
 
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None, args=None):
     # 只用来跑OMIGA的6-agent
-    if env_name in ['HalfCheetah-v2']:
+    if env_name in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
         all_episodes_rewards = []
@@ -292,7 +292,7 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
             # agent_num = len(data)
             # we need to concate marl datasets with [{}, {}] into one dict
             # === OMIGA 的6-agent数据 ===
-            if env_id in ['HalfCheetah-v2', '2-ant']:   # '4-ant'
+            if env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2']:   # 
                 data_concate = {}
                 # 需要concate的字段（每个智能体都有独立的数据）
                 concate_fields = ["obs", "action", "next_obs", "next_action"]
@@ -404,11 +404,12 @@ def critic(args):
     np.random.seed(args.seed)
 
     # 只考虑6-agent halfcheetah
-    if args.env_id in ['HalfCheetah-v2']:
-        env_args = {"scenario": args.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+    if args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2']:
+        # env_args = {"scenario": args.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+        env_args = args.env_args
         # OMIGA 设置 6x1 和 obsk 1
         env = MujocoMulti(env_args=env_args)
-        args.env_args = env_args
+        # args.env_args = env_args
         env.seed(args.seed + 100)
         env_info = env.get_env_info()  # omiga state 23, obs 23, n_agents 6, normalise action False
     elif args.env_id == 'bandit':
@@ -423,7 +424,7 @@ def critic(args):
 
 
     # === 这里要小心维度如何影响更新 ===
-    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
         each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
@@ -481,7 +482,7 @@ def critic(args):
 
 
     # Load Buffer
-    if args.env_id in ['HalfCheetah-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2', 'bandit']:
         replay_buffer = ReplayBuffer(args.buffer_length,
                                      agent_num,
                                      [env_info['obs_shape'] for _ in env.observation_space],
@@ -570,13 +571,18 @@ def pretrain_critic_args():
     # 只用于 mamujoco
     if config.env_id == "HalfCheetah-v2":      
         config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
-    elif config.env_id == "2-ant":
-        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}  # 需要更新确认
-
+    elif config.env_id == "Ant-v2":
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x4', "agent_obsk": 1,}  # 需要更新确认
+    elif config.env_id == "Hopper-v2":
+        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '3x1', "agent_obsk": 1,} 
 
     # combine dir
     if config.env_id in ['HalfCheetah-v2']:
         config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
+    elif config.env_id in ['Ant-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-2x4-{config.data_type}.hdf5"
+    elif config.env_id in ['Hopper-v2']:
+        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-3x1-{config.data_type}.hdf5"
 
 
 

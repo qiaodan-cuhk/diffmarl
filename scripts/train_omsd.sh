@@ -5,13 +5,13 @@ seeds=(42)
 ## algo seletion
 difftype="SRPO"     # DQL
 marltype="SEQ"      
-TASK="HalfCheetah-v2"
+TASK="Hopper-v2"
 trainsteps=1000000
 
 devices=(1 2 3 4 5)  # 可用的GPU设备列表
-beta=(0.001 0.003 0.005 0.03 0.05)
+beta=(0.03 0.05 0.1 0.3 0.5)
 # medium-expert 和  expert 训练完了
-types=("expert") # "expert" "random" "medium-replay"
+types=("medium-replay") # "expert" "medium-replay"
 diffusion_epoch_num=179
 critic_epoch_num=179
 
