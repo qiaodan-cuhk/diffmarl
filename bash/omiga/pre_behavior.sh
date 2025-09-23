@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # 在用seq去pretrain的时候，直接train的是agent1的条件分布，还需要用ind去train得到agent0的分布
-datatypes=("medium" "medium-replay")  # "expert" "medium" "medium-replay"
+datatypes=("expert" "medium" "medium-replay" "medium-expert")  # "expert" "medium" "medium-replay" "medium-expert"
 
 # expert 和 medium-expert 的agent0需要重新训练
 # medium和medium-replay从头训练
@@ -10,9 +10,9 @@ datatypes=("medium" "medium-replay")  # "expert" "medium" "medium-replay"
 ## algo selection
 # difftype="SRPO"     # DQL
 marltype="Seq"      # default Seq, Can train JAL, IND, CTDE
-TASK="HalfCheetah-v2"
-devices=(1 2 3 4)  # 可用的GPU设备列表
-agent_idx=(0 1 2 3 4 5) # 用于指定train agent id
+TASK="Ant-v2"
+devices=(2 3 4 5)  # 可用的GPU设备列表
+agent_idx=(0 1) # 用于指定train agent id
 # agent_idx=(0)
 
 # 初始化计数器

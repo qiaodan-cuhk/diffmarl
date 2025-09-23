@@ -1,5 +1,5 @@
 #!/bin/sh
-datatypes=("expert" "medium-replay" "medium-expert")  # "expert" "medium" "medium-replay" "random"
+datatypes=("medium-expert" "medium")  # "expert" "medium" "medium-replay" "medium-expert"
 
 # optimal param
 # expert: tau=0.7, temp=3,5,7
@@ -15,12 +15,12 @@ datatypes=("expert" "medium-replay" "medium-expert")  # "expert" "medium" "mediu
 ## algo selection
 # difftype="SRPO"     # DQL
 marltype="JAL"      # Can train JAL, IND, CTDE    seq使用ctde/jal critic
-TASK="HalfCheetah-v2"
-devices=(5)  # 可用的GPU设备列表
+TASK="Ant-v2"
+devices=(1)  # 可用的GPU设备列表
 
 # 添加tau和temp的搜索范围
-tau_values=(0.5 0.7 0.9)
-temp_values=(0.5 1.0 3.0 5.0 7.0) 
+tau_values=(0.7)
+temp_values=(3.0) 
 
 # 初始化计数器
 counter=0

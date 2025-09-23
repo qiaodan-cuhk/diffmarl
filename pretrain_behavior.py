@@ -311,7 +311,7 @@ def behavior(args):
                     ]
 
 
-    if args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'bandit']:
         replay_buffer = ReplayBuffer(args.buffer_length,
                                      agent_num,
                                      [env_info['obs_shape'] for _ in env.observation_space],
@@ -319,6 +319,15 @@ def behavior(args):
                                      is_mamujoco=True,
                                      state_dims=[env_info['state_shape'] for _ in env.observation_space],
                                      device = args.device)
+    elif args.env_id in ['Ant-v2']:
+        replay_buffer = ReplayBuffer(args.buffer_length,
+                                     agent_num,
+                                     [env_info['obs_shape'] for _ in env.observation_space],
+                                     [acsp.shape[0] for acsp in env.action_space],
+                                     is_mamujoco=True,
+                                     state_dims=[env_info['state_shape'] for _ in env.observation_space],
+                                     device = args.device,
+                                     store_on_gpu=True)
     elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']:  
         replay_buffer = ReplayBuffer(
             args.buffer_length, agent_num,

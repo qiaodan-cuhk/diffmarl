@@ -230,15 +230,15 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
             
         
         """ Save models """
-        if args.save_model and epoch_loss < best_loss:
-            best_loss = epoch_loss
-            print("New lowest critic loss in epoch {}, Save models".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain", f"{args.env_id}_{args.data_type}_seed{args.seed}", "IND", "best_critic_{}.pth".format(agent_num)))
-            # /data/qiaodan/code/diffmarl/pretrain/env_id/IND/best_critic_i.pth
+        # if args.save_model and epoch_loss < best_loss:
+        #     best_loss = epoch_loss
+        #     print("New lowest critic loss in epoch {}, Save models".format(epoch))
+        #     torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", args.env_id, f"{args.data_type}_seed{args.seed}", "IND", "best_critic_{}.pth".format(agent_num)))
+        #     # /data/qiaodan/code/diffmarl/pretrain/env_id/IND/best_critic_i.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save critic models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain", f"{args.env_id}_{args.data_type}_seed{args.seed}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
+            torch.save(score_model.q[0].state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", args.env_id, f"{args.data_type}_seed{args.seed}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
             # /data/qiaodan/code/diffmarl/pretrain/env_id_level/IND/critic_1_epoch150.pth
 
 
@@ -482,7 +482,7 @@ def critic(args):
 
 
     # Load Buffer
-    if args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2', 'bandit']:
+    if args.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'bandit']:
         replay_buffer = ReplayBuffer(args.buffer_length,
                                      agent_num,
                                      [env_info['obs_shape'] for _ in env.observation_space],
@@ -490,6 +490,15 @@ def critic(args):
                                      is_mamujoco=True,
                                      state_dims=[env_info['state_shape'] for _ in env.observation_space],
                                      device = args.device)
+    elif args.env_id in ['Ant-v2']:
+        replay_buffer = ReplayBuffer(args.buffer_length,
+                                     agent_num,
+                                     [env_info['obs_shape'] for _ in env.observation_space],
+                                     [acsp.shape[0] for acsp in env.action_space],
+                                     is_mamujoco=True,
+                                     state_dims=[env_info['state_shape'] for _ in env.observation_space],
+                                     device = args.device,
+                                     store_on_gpu=True)
     elif args.env_id in ['simple_spread', 'simple_tag', 'simple_world']: 
         replay_buffer = ReplayBuffer(args.buffer_length,
                                      agent_num,
