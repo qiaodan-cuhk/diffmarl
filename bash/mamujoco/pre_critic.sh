@@ -17,5 +17,5 @@ device=3
 for types in "${datatypes[@]}"
 do
     echo "data types: $types, device: $device, data number: $dataset_seed, mix datasets: $mix"
-    python pretrain_critic.py --data_type $types --dataset_num $dataset_seed --device $device --srpo_mode $marltype &
+    python /home/qiaodan/code/diffmarl/pretrain_behavior.py --data_type $types --dataset_num $dataset_seed --device $device --srpo_mode $marltype &
 done

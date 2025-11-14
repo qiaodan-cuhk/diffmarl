@@ -48,7 +48,7 @@ def train_ind_behavior(args, score_model, data_loader, agent_num, writer, start_
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 100
+    epoch_save_interval = args.save_interval
     best_loss = 1e3
 
     for epoch in tqdm_epoch:
@@ -88,7 +88,7 @@ def train_joint_behavior(args, score_model, data_loader, writer, start_epoch=0):
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 50
+    epoch_save_interval = args.save_interval
     best_loss = 1e3
 
     for epoch in tqdm_epoch:
@@ -139,7 +139,7 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 50
+    epoch_save_interval = args.save_interval
     best_loss = 1e3
 
     if agent_num == 0:
@@ -386,8 +386,10 @@ def behavior(args):
             [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
         )
 
-    if args.env_id in ['2ant', '4ant', '2halfcheetah']:
-        replay_buffer.load_batch_data_ogmarl(args.dataset_dir, rew_scale = args.rew_scale)
+    if args.env_id in ['2ant', '4ant']:
+        replay_buffer.load_batch_data_ogmarl(args.dataset_dir, rew_scale = args.rew_scale, load_to_gpu=True)
+    elif args.env_id in ['2halfcheetah']:
+        replay_buffer.load_batch_data_ogmarl(args.dataset_dir, rew_scale = args.rew_scale, load_to_gpu=False)
     else:   
         replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
 
@@ -398,7 +400,7 @@ def behavior(args):
     """ Model Saving Dir """
     model_save_dir = os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", args.srpo_mode)
     if not os.path.exists(model_save_dir):
-        os.makedirs(model_save_dir)
+        os.makedirs(model_save_dir, exist_ok=True)
 
 
     print("training behavior")
@@ -447,17 +449,16 @@ def pretrain_behavior_args():
     parser.add_argument('--log_dir', default='/home/qiaodan/code/diffmarl/logs', type=str)
     parser.add_argument("--use_gpu", default=True, type=bool, help='use cuda or not')
     # params for buffer and data
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)  # full marl dataset is 1e6 
+    parser.add_argument("--buffer_length", default=int(3e6), type=int)  # full marl dataset is 1e6 
     parser.add_argument("--rew_scale", default=1.0, type=float)
     parser.add_argument("--save_model", default=True, type=bool)
+    parser.add_argument("--save_interval", default=50, type=int)
     parser.add_argument("--save_dir", default='/home/qiaodan/code/diffmarl/pretrained_models', type=str)
     # continuous MPE default False
     parser.add_argument("--discrete_action", action='store_true', default=False)
 
     # mixed datasets,已经不需要了，移除
     # parser.add_argument("--mixed_data", action='store_true', default=False)
-
-
     # parser.add_argument("--eval_models", default=False, type=bool)
 
     config = parser.parse_args()

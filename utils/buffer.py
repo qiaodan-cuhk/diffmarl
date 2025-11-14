@@ -55,41 +55,75 @@ class ReplayBuffer(object):
 
     def sample(self, N, to_gpu=False):
         inds = np.random.choice(np.arange(self.filled_i), size=N, replace=True)  # 默认是false，但用true可以加速大数据集的采样效率
-        if to_gpu:
-            cast = lambda x: Variable(Tensor(x), requires_grad=False).to(self.device)
+
+
+        # 检查 buffer 是否已经是 torch tensor（在 GPU 上）
+        is_torch_buffer = isinstance(self.obs_buffs[0], torch.Tensor)
+
+        if is_torch_buffer:
+            # 如果 buffer 已经在 GPU 上，直接索引返回（无需转换）
+            bf = []
+            if self.is_mamujoco:
+                for i in range(self.num_agents):                
+                    agent_data = {"state": self.state_buffs[i][inds],
+                                  "obs": self.obs_buffs[i][inds],
+                                  "action": self.ac_buffs[i][inds],
+                                  "rewards": self.rew_buffs[i][inds],
+                                  "next_state": self.next_state_buffs[i][inds],
+                                  "next_obs": self.next_obs_buffs[i][inds],
+                                  "done": self.done_buffs[i][inds],
+                                  "next_action": self.ac_buffs[i][(inds+1)%self.filled_i]
+                                  }
+                    bf.append(agent_data)
+            else:
+                for i in range(self.num_agents):
+                    agent_data = {"obs": self.obs_buffs[i][inds],
+                                  "action": self.ac_buffs[i][inds],
+                                  "rewards": self.rew_buffs[i][inds],
+                                  "next_obs": self.next_obs_buffs[i][inds],
+                                  "done": self.done_buffs[i][inds],
+                                  "next_action": self.ac_buffs[i][(inds+1)%self.filled_i]
+                                  }
+                    bf.append(agent_data)
+            return bf
+
         else:
-            cast = lambda x: Variable(Tensor(x), requires_grad=False).cpu()
 
-        bf = []
+            if to_gpu:
+                cast = lambda x: Variable(Tensor(x), requires_grad=False).to(self.device)
+            else:
+                cast = lambda x: Variable(Tensor(x), requires_grad=False).cpu()
 
-        if self.is_mamujoco:
-            for i in range(self.num_agents):                
-                agent_data = {"state": cast(self.state_buffs[i][inds]),
-                              "obs": cast(self.obs_buffs[i][inds]),
-                              "action": cast(self.ac_buffs[i][inds]),
-                              "rewards": cast(self.rew_buffs[i][inds]),
-                              "next_state": cast(self.next_state_buffs[i][inds]),
-                              "next_obs": cast(self.next_obs_buffs[i][inds]),
-                              "done": cast(self.done_buffs[i][inds]),
-                              "next_action": cast(self.ac_buffs[i][(inds+1)%self.filled_i])
-                              }
+            bf = []
 
-                bf.append(agent_data)
-        else:
-            for i in range(self.num_agents):
-                agent_data = {"obs": cast(self.obs_buffs[i][inds]),
-                              "action": cast(self.ac_buffs[i][inds]),
-                              "rewards": cast(self.rew_buffs[i][inds]),
-                              "next_obs": cast(self.next_obs_buffs[i][inds]),
-                              "done": cast(self.done_buffs[i][inds]),
-                              "next_action": cast(self.ac_buffs[i][(inds+1)%self.filled_i])
-                              }
+            if self.is_mamujoco:
+                for i in range(self.num_agents):                
+                    agent_data = {"state": cast(self.state_buffs[i][inds]),
+                                "obs": cast(self.obs_buffs[i][inds]),
+                                "action": cast(self.ac_buffs[i][inds]),
+                                "rewards": cast(self.rew_buffs[i][inds]),
+                                "next_state": cast(self.next_state_buffs[i][inds]),
+                                "next_obs": cast(self.next_obs_buffs[i][inds]),
+                                "done": cast(self.done_buffs[i][inds]),
+                                "next_action": cast(self.ac_buffs[i][(inds+1)%self.filled_i])
+                                }
 
-                bf.append(agent_data)
+                    bf.append(agent_data)
+            else:
+                for i in range(self.num_agents):
+                    agent_data = {"obs": cast(self.obs_buffs[i][inds]),
+                                "action": cast(self.ac_buffs[i][inds]),
+                                "rewards": cast(self.rew_buffs[i][inds]),
+                                "next_obs": cast(self.next_obs_buffs[i][inds]),
+                                "done": cast(self.done_buffs[i][inds]),
+                                "next_action": cast(self.ac_buffs[i][(inds+1)%self.filled_i])
+                                }
 
-        # data structure: [{1} {2} ... {N}]
+                    bf.append(agent_data)
 
-        return bf
+            # data structure: [{1} {2} ... {N}]
+
+            return bf
 
     def load_batch_data(self, dir, rew_scale=1.0):
         print ('\033[1;33mloading batch data from {}...\033[1;0m'.format(dir))
@@ -138,7 +172,7 @@ class ReplayBuffer(object):
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
 
     # 用于mamujoco 210数据集格式from ogmarl
-    def load_batch_data_ogmarl(self, dir, rew_scale=1.0):
+    def load_batch_data_ogmarl(self, dir, rew_scale=1.0, load_to_gpu=False):
         """
         加载新格式的数据，数据格式为：
         - obs.npy: 所有智能体的观察空间
@@ -180,16 +214,45 @@ class ReplayBuffer(object):
         for i in range(self.num_agents):
 
             # 移除前num_agents个维度的onehot编码in ogmarl datasets
-            self.obs_buffs[i][:num_experiences] = observations[:, i, self.num_agents:] 
-            self.ac_buffs[i][:num_experiences] = actions[:, i]
-            self.rew_buffs[i][:num_experiences] = rewards[:, i] * rew_scale
-            self.next_obs_buffs[i][:num_experiences] = next_observations[:, i, self.num_agents:]
-            self.done_buffs[i][:num_experiences] = dones[:, i]
+            # self.obs_buffs[i][:num_experiences] = observations[:, i, self.num_agents:] 
+            # self.ac_buffs[i][:num_experiences] = actions[:, i]
+            # self.rew_buffs[i][:num_experiences] = rewards[:, i] * rew_scale
+            # self.next_obs_buffs[i][:num_experiences] = next_observations[:, i, self.num_agents:]
+            # self.done_buffs[i][:num_experiences] = dones[:, i]
+
+            agent_obs = observations[:, i, self.num_agents:] 
+            agent_actions = actions[:, i]
+            agent_rewards = rewards[:, i] * rew_scale
+            agent_next_obs = next_observations[:, i, self.num_agents:]
+            agent_dones = dones[:, i]
+
+
+            if load_to_gpu:
+                # 转换为 torch tensor 并放到 GPU
+                self.obs_buffs[i] = torch.from_numpy(agent_obs).float().to(self.device)
+                self.ac_buffs[i] = torch.from_numpy(agent_actions).float().to(self.device)
+                self.rew_buffs[i] = torch.from_numpy(agent_rewards).float().to(self.device)
+                self.next_obs_buffs[i] = torch.from_numpy(agent_next_obs).float().to(self.device)
+                self.done_buffs[i] = torch.from_numpy(agent_dones).float().to(self.device)
+            else:
+                # 原有方式：存储为 numpy 数组
+                self.obs_buffs[i][:num_experiences] = agent_obs
+                self.ac_buffs[i][:num_experiences] = agent_actions
+                self.rew_buffs[i][:num_experiences] = agent_rewards
+                self.next_obs_buffs[i][:num_experiences] = agent_next_obs
+                self.done_buffs[i][:num_experiences] = agent_dones
             
+
             if self.is_mamujoco:
                 # 计算平均奖励和总奖励
-                self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / len(path_lengths)
-                self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
+                if load_to_gpu:
+                    # 如果 buffer 是 torch tensor，使用 torch.sum()
+                    self.ave_reward = torch.sum(self.rew_buffs[i]).item() / len(path_lengths)
+                    self.sum_reward = torch.sum(self.rew_buffs[i]).item()
+                else:
+                    # 如果 buffer 是 numpy array，使用 np.sum()
+                    self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / len(path_lengths)
+                    self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])
         
         self.filled_i = num_experiences
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
