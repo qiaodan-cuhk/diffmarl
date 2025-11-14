@@ -175,20 +175,26 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
                 torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-    elif agent_num == 1:
+
+    elif agent_num > 0:
         for epoch in tqdm_epoch:
             avg_loss = 0.
             num_items = 0
             for step_in_epoch in range(10000):
                 data = data_loader.sample(args.batch_size)
                 data_i = data[agent_num]
-                data_0 = data[0]
 
-                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
-                # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
-                data_i['obs'] = torch.cat((data_i['obs'], data_0['action']), dim=1).to(args.device)
-                data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action']), dim=1).to(args.device)
+                # 收集所有前序agents的action
+                prev_actions = []
+                prev_next_actions = []
+                for prev_agent in range(agent_num):
+                    prev_actions.append(data[prev_agent]['action'])
+                    prev_next_actions.append(data[prev_agent]['next_action'])
                 
+                # 将前序agents的action连接到当前agent的观察中
+                data_i['obs'] = torch.cat([data_i['obs']] + prev_actions, dim=1).to(args.device)
+                data_i['next_obs'] = torch.cat([data_i['next_obs']] + prev_next_actions, dim=1).to(args.device)
+
                 loss2 = score_model.update_behavior(data_i)
                 avg_loss += score_model.loss.detach().cpu().numpy()
                 num_items += 1
@@ -212,87 +218,126 @@ def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_
             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
                 print("Save models: Epoch {}".format(epoch))
                 torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
-    elif agent_num == 2:
-        for epoch in tqdm_epoch:
-            avg_loss = 0.
-            num_items = 0
-            for step_in_epoch in range(10000):
-                data = data_loader.sample(args.batch_size)
-                data_2 = data[agent_num]
-                data_1 = data[1]
-                data_0 = data[0]
+                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth 
+
+    # elif agent_num == 1:
+    #     for epoch in tqdm_epoch:
+    #         avg_loss = 0.
+    #         num_items = 0
+    #         for step_in_epoch in range(10000):
+    #             data = data_loader.sample(args.batch_size)
+    #             data_i = data[agent_num]
+    #             data_0 = data[0]
+
+    #             """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
+    #             # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
+    #             data_i['obs'] = torch.cat((data_i['obs'], data_0['action']), dim=1).to(args.device)
+    #             data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action']), dim=1).to(args.device)
                 
+    #             loss2 = score_model.update_behavior(data_i)
+    #             avg_loss += score_model.loss.detach().cpu().numpy()
+    #             num_items += 1
+    #             writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+    #         tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
 
-                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
-                # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
-                data_2['obs'] = torch.cat((data_2['obs'], data_0['action'], data_1['action']), dim=1).to(args.device)
-                data_2['next_obs'] = torch.cat((data_2['next_obs'], data_0['next_action'], data_1['next_action']), dim=1).to(args.device)
-                
-                loss2 = score_model.update_behavior(data_2)
-                avg_loss += score_model.loss.detach().cpu().numpy()
-                num_items += 1
-                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
-            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+    #         epoch_loss = score_model.loss.detach().cpu().numpy()
+    #         writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
 
-            epoch_loss = score_model.loss.detach().cpu().numpy()
-            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+    #         """ Log by tensorboard"""
+    #         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+    #             writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+    #             writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+    #             # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
 
-            """ Log by tensorboard"""
-            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
-                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
-                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
-                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
-
-            # if args.save_model and epoch_loss < best_loss:
-            #     best_loss = epoch_loss
-            #     print("New lowest loss in epoch {}, Save best models".format(epoch))
-            #     torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+    #         # if args.save_model and epoch_loss < best_loss:
+    #         #     best_loss = epoch_loss
+    #         #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+    #         #     torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
-            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
-                print("Save models: Epoch {}".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
-    elif agent_num == 3:
-        for epoch in tqdm_epoch:
-            avg_loss = 0.
-            num_items = 0
-            for step_in_epoch in range(10000):
-                data = data_loader.sample(args.batch_size)
-                data_i = data[agent_num]
-                data_0 = data[0]
-                data_1 = data[1]
-                data_2 = data[2]
-
-                """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
-                # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
-                data_i['obs'] = torch.cat((data_i['obs'], data_0['action'], data_1['action'], data_2['action']), dim=1).to(args.device)
-                data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action'], data_1['next_action'], data_2['next_action']), dim=1).to(args.device)
+    #         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+    #             print("Save models: Epoch {}".format(epoch))
+    #             torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+    #             # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
+    # elif agent_num == 2:
+    #     for epoch in tqdm_epoch:
+    #         avg_loss = 0.
+    #         num_items = 0
+    #         for step_in_epoch in range(10000):
+    #             data = data_loader.sample(args.batch_size)
+    #             data_2 = data[agent_num]
+    #             data_1 = data[1]
+    #             data_0 = data[0]
                 
-                loss2 = score_model.update_behavior(data_i)
-                avg_loss += score_model.loss.detach().cpu().numpy()
-                num_items += 1
-                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
-            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
 
-            epoch_loss = score_model.loss.detach().cpu().numpy()
-            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+    #             """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
+    #             # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
+    #             data_2['obs'] = torch.cat((data_2['obs'], data_0['action'], data_1['action']), dim=1).to(args.device)
+    #             data_2['next_obs'] = torch.cat((data_2['next_obs'], data_0['next_action'], data_1['next_action']), dim=1).to(args.device)
+                
+    #             loss2 = score_model.update_behavior(data_2)
+    #             avg_loss += score_model.loss.detach().cpu().numpy()
+    #             num_items += 1
+    #             writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+    #         tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
 
-            """ Log by tensorboard"""
-            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
-                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
-                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
-                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+    #         epoch_loss = score_model.loss.detach().cpu().numpy()
+    #         writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
 
-            # if args.save_model and epoch_loss < best_loss:
-            #     best_loss = epoch_loss
-            #     print("New lowest loss in epoch {}, Save best models".format(epoch))
-            #     torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+    #         """ Log by tensorboard"""
+    #         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+    #             writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+    #             writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+    #             # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+
+    #         # if args.save_model and epoch_loss < best_loss:
+    #         #     best_loss = epoch_loss
+    #         #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+    #         #     torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
             
-            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
-                print("Save models: Epoch {}".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
+    #         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+    #             print("Save models: Epoch {}".format(epoch))
+    #             torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+    #             # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
+    # elif agent_num == 3:
+    #     for epoch in tqdm_epoch:
+    #         avg_loss = 0.
+    #         num_items = 0
+    #         for step_in_epoch in range(10000):
+    #             data = data_loader.sample(args.batch_size)
+    #             data_i = data[agent_num]
+    #             data_0 = data[0]
+    #             data_1 = data[1]
+    #             data_2 = data[2]
+
+    #             """ Sequetial 体现在这里，数据构造额外加了前序agents的action"""
+    #             # all_s = data['obs'].to(self.device) 改成 obs+pre action 作为condition即可
+    #             data_i['obs'] = torch.cat((data_i['obs'], data_0['action'], data_1['action'], data_2['action']), dim=1).to(args.device)
+    #             data_i['next_obs'] = torch.cat((data_i['next_obs'], data_0['next_action'], data_1['next_action'], data_2['next_action']), dim=1).to(args.device)
+                
+    #             loss2 = score_model.update_behavior(data_i)
+    #             avg_loss += score_model.loss.detach().cpu().numpy()
+    #             num_items += 1
+    #             writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+    #         tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+
+    #         epoch_loss = score_model.loss.detach().cpu().numpy()
+    #         writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+    #         """ Log by tensorboard"""
+    #         if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+    #             writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+    #             writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+    #             # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+
+    #         # if args.save_model and epoch_loss < best_loss:
+    #         #     best_loss = epoch_loss
+    #         #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+    #         #     torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "Seq", "best_diffusion_{}.pth".format(agent_num)))
+            
+    #         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+    #             print("Save models: Epoch {}".format(epoch))
+    #             torch.save(score_model.state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "Seq", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+    #             # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth  
 
         
 
