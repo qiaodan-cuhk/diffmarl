@@ -3,6 +3,7 @@ from torch import Tensor
 from torch.autograd import Variable
 import torch
 import math
+import os
 
 # halfcheetah medium replay 46w 数据
 # simple spread mid replay 97500
@@ -137,7 +138,7 @@ class ReplayBuffer(object):
         self.curr_i = 0 if self.curr_i == self.max_steps else num_experiences
 
     # 用于mamujoco 210数据集格式from ogmarl
-    def load_batch_data_new_format(self, dir, rew_scale=1.0):
+    def load_batch_data_ogmarl(self, dir, rew_scale=1.0):
         """
         加载新格式的数据，数据格式为：
         - obs.npy: 所有智能体的观察空间
@@ -148,10 +149,11 @@ class ReplayBuffer(object):
         print('\033[1;33mloading new format batch data from {}...\033[1;0m'.format(dir))
         
         # 加载数据
-        observations = np.load(os.path.join(dir, 'obs.npy'))
+        observations = np.load(os.path.join(dir, 'obs.npy'))   # 前两位是onehot
         actions = np.load(os.path.join(dir, 'actions.npy'))
         rewards = np.load(os.path.join(dir, 'rewards.npy'))
         path_lengths = np.load(os.path.join(dir, 'path_lengths.npy'))
+        discounts = np.load(os.path.join(dir, 'discounts.npy'))
         
         # 计算总样本数
         num_experiences = observations.shape[0]
@@ -162,6 +164,8 @@ class ReplayBuffer(object):
         for path_length in path_lengths:
             dones[start + path_length - 1] = 1  # 每个轨迹的最后一步标记为done
             start += path_length
+
+        assert np.all((dones + discounts) == 1)
         
         # 生成next_obs（通过移位）
         next_observations = np.roll(observations, -1, axis=0)
@@ -174,18 +178,15 @@ class ReplayBuffer(object):
         
         # 为每个智能体分配数据
         for i in range(self.num_agents):
-            # 假设数据的第二维是智能体维度
-            self.obs_buffs[i][:num_experiences] = observations[:, i]
+
+            # 移除前num_agents个维度的onehot编码in ogmarl datasets
+            self.obs_buffs[i][:num_experiences] = observations[:, i, self.num_agents:] 
             self.ac_buffs[i][:num_experiences] = actions[:, i]
             self.rew_buffs[i][:num_experiences] = rewards[:, i] * rew_scale
-            self.next_obs_buffs[i][:num_experiences] = next_observations[:, i]
+            self.next_obs_buffs[i][:num_experiences] = next_observations[:, i, self.num_agents:]
             self.done_buffs[i][:num_experiences] = dones[:, i]
             
             if self.is_mamujoco:
-                # 如果需要额外的状态信息，可以从observations中提取或加载额外的文件
-                self.state_buffs[i][:num_experiences] = observations[:, i]  # 可能需要调整
-                self.next_state_buffs[i][:num_experiences] = next_observations[:, i]  # 可能需要调整
-                
                 # 计算平均奖励和总奖励
                 self.ave_reward = np.sum(self.rew_buffs[i][:num_experiences]) / len(path_lengths)
                 self.sum_reward = np.sum(self.rew_buffs[i][:num_experiences])

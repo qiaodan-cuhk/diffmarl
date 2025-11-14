@@ -3,11 +3,21 @@ import numpy as np
 import time
 
 
+
+# state dim 17, obs dim 13 if global categories, obs dim 7 if obsk 1, obs dim 6 if obsk 0
+
 def main():
-    env_args = {"scenario": "HalfCheetah-v2",
-                  "agent_conf": "2x3",
-                  "agent_obsk": 0,
-                  "episode_limit": 1000}
+    env_args = {
+            "scenario": "HalfCheetah-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x3",
+            "agent_obsk": 0,
+            # "global_categories": "qvel,qpos",
+        }
+    # env_args = {"scenario": "HalfCheetah-v2",
+    #               "agent_conf": "2x3",
+    #               "agent_obsk": 0,
+    #               "episode_limit": 1000}
     env = MujocoMulti(env_args=env_args)
     env_info = env.get_env_info()
 
@@ -31,11 +41,20 @@ def main():
                 action = np.random.uniform(-1.0, 1.0, n_actions)
                 actions.append(action)
 
-            reward, terminated, _ = env.step(actions)
+            # print(env.step(actions))
+            next_obs, reward, terminated, info = env.step(actions)
+
+            print(f"state shape: {state.shape}")
+            print(f"next_obs shape: {next_obs.shape}")
+            print(f"reward: {reward}")
+            print(f"terminated: {terminated}")
+            print(f"info: {info}")
+
+            terminated = terminated[0]
             episode_reward += reward
 
             time.sleep(0.1)
-            env.render()
+            # env.render()
 
 
         print("Total reward in episode {} = {}".format(e, episode_reward))
