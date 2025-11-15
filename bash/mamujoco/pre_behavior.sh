@@ -5,12 +5,12 @@ datatypes=("Good" "Medium" "Poor")  # Good Medium Poor
 
 ## algo selection
 marltype="Seq"      # default Seq, Can train JAL, IND, CTDE
-TASK="4ant"  # 2ant, 4ant, 2halfcheetah
+TASK="2halfcheetah"  # 2ant, 4ant, 2halfcheetah
 # device=3
 # agent_idx=0 # 用于指定train 0 还是 1
 
 device_idx=0
-for agent_idx in 0 1 2 3
+for agent_idx in 0 1
 do
     for types in "${datatypes[@]}"
     do
@@ -20,3 +20,6 @@ do
         device_idx=$((device_idx + 1))
     done
 done
+
+wait  # 等待所有后台任务完成
+echo "All training jobs completed!"

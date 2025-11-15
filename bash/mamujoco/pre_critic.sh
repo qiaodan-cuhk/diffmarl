@@ -2,20 +2,31 @@
 
 # expert 用 datanum 3最好，medium+replay用datanum 1最好 random用的是0
 
-datatypes=("medium" "medium-replay")  # "expert" "medium" "medium-replay" "random"
-dataset_seed=1   # 1 2 3
-mix=False
+datatypes=("Good" "Medium" "Poor")  # Good Medium Poor
+marltype="JAL"      # JAL, IND
+TASK="4ant"  # 2ant, 4ant, 2halfcheetah
 
-## algo selection
-# difftype="SRPO"     # DQL
-marltype="JAL"      # Can train JAL, IND, CTDE    seq使用ctde/jal critic
-TASK="HalfCheetah-v2"
-device=3
+tau_list=(0.5 0.7)
+temp_list=(3.0 5.0)
 
+device_idx=0
+eval_interval=5
+save_interval=10
 # if train on mixed data: --mixed_data
 
 for types in "${datatypes[@]}"
 do
-    echo "data types: $types, device: $device, data number: $dataset_seed, mix datasets: $mix"
-    python /home/qiaodan/code/diffmarl/pretrain_behavior.py --data_type $types --dataset_num $dataset_seed --device $device --srpo_mode $marltype &
+    for tau in "${tau_list[@]}"
+    do
+        for temp in "${temp_list[@]}"
+        do
+            device=$((device_idx % 4))  # 循环使用 device 0-3
+            echo "tau: $tau, temp: $temp"
+            python /home/qiaodan/code/diffmarl/pretrain_critic.py --env_id $TASK --data_type $types --device $device --save_interval $save_interval --eval_interval $eval_interval --tau $tau --temp $temp --srpo_mode $marltype &
+            device_idx=$((device_idx + 1))
+        done
+    done
 done
+
+wait  # 等待所有后台任务完成
+echo "All training jobs completed!"
