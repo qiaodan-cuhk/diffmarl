@@ -6,8 +6,8 @@ datatypes=("Good" "Medium" "Poor")  # Good Medium Poor
 marltype="JAL"      # JAL, IND
 TASK="4ant"  # 2ant, 4ant, 2halfcheetah
 
-tau_list=(0.5 0.7)
-temp_list=(3.0 5.0)
+tau_list=(0.3 0.9)
+temp_list=(1.0 7.0 9.0)
 
 device_idx=0
 eval_interval=5

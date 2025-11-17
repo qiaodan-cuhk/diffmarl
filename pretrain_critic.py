@@ -234,7 +234,7 @@ def train_ind_critic(args, score_model, data_loader, agent_num, writer, env_id, 
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save critic models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "IND", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
+            torch.save(score_model.q[0].state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "IND", f"Critic_tau{args.tau}_temp{args.temp}", "critic_{}_epoch{}.pth".format(agent_num, epoch)))
             # SRPO_premodels/env_id_level/IND/critic_1_epoch150.pth
 
 
@@ -420,7 +420,7 @@ def train_joint_critic(args, score_model, data_loader, writer, env_id, start_epo
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
             print("Save models: Epoch {}".format(epoch))
-            torch.save(score_model.q[0].state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "JAL", "critic_epoch{}.pth".format(epoch)))
+            torch.save(score_model.q[0].state_dict(), os.path.join(args.save_dir, f"{args.env_id}_{args.data_type}", "JAL", f"Critic_tau{args.tau}_temp{args.temp}", "critic_epoch{}.pth".format(epoch)))
             # SRPO_premodels/env_id_level/JAL/critic_150.pth
 
 

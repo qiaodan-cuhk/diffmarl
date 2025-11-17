@@ -19,6 +19,7 @@ wandb/
 ogmarl_data/
 envs/
 visual/bandit_traj
+results/
 
 
 # C extensions

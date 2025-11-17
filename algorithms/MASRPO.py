@@ -67,7 +67,7 @@ class BASE_SRPO(object):
         **kwargs
     ):
         self.env_id = env_id
-        self.is_mamujoco = True if self.env_id in ['HalfCheetah-v2', 'bandit'] else False
+        self.is_mamujoco = True if self.env_id in ['2ant', '4ant', '2halfcheetah', 'bandit'] else False
 
         assert (ma == agent_max_actions[0] for ma in agent_max_actions)
         self.max_action = agent_max_actions[0]
@@ -235,7 +235,7 @@ class BASE_SRPO(object):
             alg_types = [agent_alg for atype in env.agent_types if atype == 'adversary']
         elif env_id in ['simple_spread']:
             alg_types = [agent_alg for atype in env.agent_types]
-        elif env_id in ['HalfCheetah-v2']:
+        elif env_id in ['2ant', '4ant', '2halfcheetah']:
             alg_types = [agent_alg for atype in range(env_info['n_agents'])]
         elif env_id in ['bandit']:
             alg_types = [agent_alg for atype in range(2)]
@@ -246,7 +246,7 @@ class BASE_SRPO(object):
         adv_init_params = []
 
         # make agent_init_params, adv_init_params, agent_max_actions, all_n_actions
-        if env_id == 'HalfCheetah-v2':
+        if env_id in ['2ant', '4ant', '2halfcheetah']:
             for agent_idx in range(len(alg_types)):
                 acsp = env_info['action_spaces'][agent_idx]
                 num_in_pol = env_info['obs_shape']

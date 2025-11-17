@@ -49,28 +49,36 @@ def make_parallel_env(env_id, seed, discrete_action):
 # evaluate policy in eval module with envs(seed+100) on cpu
 """这里要检查一下mpe的逻辑"""
 def eval_policy(agent, env_name, seed, eval_episodes, discrete_action, device='cpu', env_args=None):
-    if env_name in ['HalfCheetah-v2']:
+    if env_name in ['2ant', '4ant', '2halfcheetah']:
         env = MujocoMulti(env_args=env_args)
         env.seed(seed + 100)
         all_episodes_rewards = []
+        eval_device = agent.device
         for ep_i in range(eval_episodes):
-            agent.prep_rollouts(device=device)  # 转成 eval 模式
+            # agent.prep_rollouts(device=device)  # 转成 eval 模式
             env.reset()
             done = False
             episode_reward = 0.
             while not done:
                 obs = env.get_obs()
                 # torch_obs = [Variable(torch.Tensor(obs[i]).unsqueeze(0), requires_grad=False) for i in range(agent.nagents)] 
-                torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(device)  for i in range(agent.nagents)] 
+                torch_obs = [torch.Tensor(obs[i]).unsqueeze(0).to(eval_device)  for i in range(agent.nagents)] 
+
                 torch_agent_actions = agent.step(torch_obs, explore=False)
+
                 # if torch.is_tensor(torch_agent_actions):
                 if all(isinstance(item, torch.Tensor) for item in torch_agent_actions):
-                    agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                    # agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # 从 tensor([[a], [a], [a]]) 变为 list[np[], np[], np[]] 
+                    agent_actions = [ac.detach().cpu().numpy() for ac in torch_agent_actions]
                 elif all(isinstance(item, np.ndarray) for item in torch_agent_actions):
                     agent_actions = torch_agent_actions
                 actions = [ac.squeeze(0) for ac in agent_actions]  # 变为 list[np, np, np]
-                reward, done, info = env.step(actions)  
-                episode_reward += reward
+                next_obs, rewards, dones, info = env.step(actions)  
+
+
+
+                episode_reward += rewards[0]
+                done = dones[0]
             all_episodes_rewards.append(episode_reward)        
         mean_episode_reward = np.mean(np.array(all_episodes_rewards))
         return mean_episode_reward
@@ -270,7 +278,7 @@ def offline_train(config):
     # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
-        outdir = os.path.join(config.dir, "nips", config.env_id, unique_token)
+        outdir = os.path.join(config.dir, config.env_id, unique_token)
         os.makedirs(outdir)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     
@@ -291,16 +299,17 @@ def offline_train(config):
     elif config.env_id == "bandit":
         env = ContinuousBanditEnv()
         env_args, env_info = None, None
-    else:
-        env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
-        env = MujocoMulti(env_args=env_args)
-        env.seed(config.seed)
+    elif config.env_id in ['2ant', '4ant', '2halfcheetah']:
+        # env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x3', "agent_obsk": 0,}
+        # env = MujocoMulti(env_args=env_args)
+        env = MujocoMulti(env_args=config.env_args)
+        env.seed(config.seed + 100)
         env_info = env.get_env_info()
 
 
-    """参考pretrain，Jan.30 考虑新增"""
+
     # 创建score model和load buffer时用得到
-    if config.env_id in ['HalfCheetah-v2', 'bandit']:
+    if config.env_id in ['2ant', '4ant', '2halfcheetah', 'bandit']:
         each_state_shape = [env_info['state_shape'] for _ in env.observation_space]
         # MaMujuco use obs as input
         each_obs_shape = [env_info['obs_shape'] for _ in env.observation_space]
@@ -429,13 +438,23 @@ def offline_train(config):
         )
     else:
         replay_buffer = ReplayBuffer(
-            config.buffer_length, ma_agent.nagents,
+            config.buffer_length, agent_num,
             [env_info['obs_shape'] for _ in env.observation_space],
             [acsp.shape[0] for acsp in env.action_space],
             is_mamujoco=True,
             state_dims=[env_info['state_shape'] for _ in env.observation_space], device = config.device
         )
-    replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
+
+
+    if config.env_id in ['2ant', '4ant']:
+        replay_buffer.load_batch_data_ogmarl(config.dataset_dir, rew_scale = config.rew_scale, load_to_gpu=True)
+    elif config.env_id in ['2halfcheetah']:
+        replay_buffer.load_batch_data_ogmarl(config.dataset_dir, rew_scale = config.rew_scale, load_to_gpu=False)
+    else:   
+        replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
+
+
+    # replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
 
     if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale; 应该是主要用于MPE环境
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
@@ -446,7 +465,7 @@ def offline_train(config):
         # configure(outdir)
         writer = SummaryWriter(outdir)
         config_log_dict = {"env": config.env_id,
-                           "dataset": "{}_{}".format(config.data_type, config.dataset_num),
+                           "dataset": "{}".format(config.data_type),
                            "dataset_ave_reward": replay_buffer.ave_reward,
                            "algo": algo_name,
                            "seed": config.seed,
@@ -489,7 +508,7 @@ def offline_train(config):
         if t % config.eval_interval == 0 or t == config.num_steps:
             # eval_policy will set rollouts at start
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
-            eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=env_args)
+            eval_return = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=config.env_args)
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
@@ -534,9 +553,9 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='simple_world', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
-    parser.add_argument("--data_type", default='expert', type=str)
-    parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--env_id", default='2ant', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--data_type", default='Good', type=str)
+    # parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
@@ -556,15 +575,15 @@ if __name__ == '__main__':
 
     """   Unchangeable Params   """
     # log and save dir
-    parser.add_argument("--dir", type=str, default='/data/qiaodan/code/diffmarl/results', help="tensorboard log directory")
-    parser.add_argument('--dataset_dir', default='/data/qiaodan/code/diffmarl/datasets', type=str)
+    parser.add_argument("--dir", type=str, default='/home/qiaodan/code/diffmarl/results', help="tensorboard log directory")
+    parser.add_argument('--dataset_dir', default='/home/qiaodan/code/diffmarl/datasets', type=str)
 
     # params for MPE envs
     parser.add_argument("--discrete_action", action='store_true', default=False)
     
     # params for buffer and data
-    parser.add_argument("--buffer_length", default=int(1e6), type=int)
-    parser.add_argument("--episode_length", default=25, type=int, help='MPE epi_length is 25, MAMuJoCo epi_length is 1000')
+    parser.add_argument("--buffer_length", default=int(3e6), type=int)
+    parser.add_argument("--episode_length", default=1000, type=int, help='MPE epi_length is 25, MAMuJoCo epi_length is 1000')
     parser.add_argument("--steps_per_update", default=100, type=int)   # 似乎没用
     parser.add_argument("--hidden_dim", default=64, type=int)  # DDPG hidden dim
     # set_lr is unuseful
@@ -591,9 +610,9 @@ if __name__ == '__main__':
 
     # regularization para
     parser.add_argument('--beta', type=float, default=0.01)  
-    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')
-    # parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')  # HalfCheetah-v2_expert
-    # parser.add_argument('--diffusion_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
+    parser.add_argument('--pretrain_model_path', type=str, default='/home/qiaodan/code/diffmarl/pretrained_models/')
+    # parser.add_argument('--critic_load_path', type=str, default='/home/qiaodan/code/diffmarl/SRPO_premodels/')  # HalfCheetah-v2_expert
+    # parser.add_argument('--diffusion_load_path', type=str, default='/home/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
     # twin Q MLP layers
     parser.add_argument('--q_layer', type=int, default=2)
@@ -616,7 +635,9 @@ if __name__ == '__main__':
     config = parser.parse_args()
 
     temperature_coefficients = {"simple_spread": 0.08,
-                            "HalfCheetah-v2": 0.02,
+                            "2ant": 0.02,
+                            "4ant": 0.02,
+                            "2halfcheetah": 0.02,
                             "bandit": 0.02}
     if config.beta is None:
         config.beta = temperature_coefficients[config.env_id]
@@ -633,9 +654,9 @@ if __name__ == '__main__':
         config.device = "cpu"
     
     # dataset premodel path
-    if config.env_id in ['HalfCheetah-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
-        config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}_seed{config.dataset_num}"
+    if config.env_id in ['2ant', '4ant', '2halfcheetah', 'bandit']:
+        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
+        config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
 
 
     # make envs params
@@ -675,7 +696,35 @@ if __name__ == '__main__':
     if config.env_id == "bandit":
         config.dataset_dir = config.dataset_dir + '/' + config.env_id
     else:        
-        config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
+        config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type
+
+
+
+    # 根据不同环境配置不同的env_args
+    if config.env_id == "2ant":
+        config.env_args = {
+            "scenario": "Ant-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x4",
+            "agent_obsk": 1,
+            "global_categories": "qvel,qpos",
+        }
+    elif config.env_id == "4ant":
+        config.env_args = {
+            "scenario": "Ant-v2",
+            "episode_limit": 1000,
+            "agent_conf": "4x2",
+            "agent_obsk": 1,
+            "global_categories": "qvel,qpos",
+        }
+    elif config.env_id == "2halfcheetah":
+        config.env_args = {
+            "scenario": "HalfCheetah-v2",
+            "episode_limit": 1000,
+            "agent_conf": "2x3",
+            "agent_obsk": 1,
+            "global_categories": "qvel,qpos",
+        }
 
     offline_train(config) 
 
