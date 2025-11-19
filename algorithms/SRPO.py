@@ -174,6 +174,80 @@ class SRPO_CTDE(nn.Module):
             return loss, episilon, guidance, error_a, a
         else:
             return loss, episilon, guidance, error_a
+
+
+    
+    # 用于扰动顺序
+    def update_SRPO_policy_ordered(self, data, agent_id, update_order_idx):
+        s = data['s']        
+        s_joint = data['s_joint'] # 用于计算Q值的condition
+        a_joint = data['a_joint'] # 用于计算Q值的action
+
+        a_joint_ordered = data['a_joint_ordered'] # 用于计算prefix action condition diffusion
+
+        self.diffusion_behavior.eval()
+        a = self.SRPO_policy(s)
+        t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
+        # random noising time t
+        alpha_t, std = self.marginal_prob_std(t)
+        z = torch.randn_like(a)
+        perturbed_a = a * alpha_t[..., None] + z * std[..., None]
+        # add noise to policy action, generate a_t
+
+        with torch.no_grad():
+            episilon = self.diffusion_behavior(perturbed_a, t, s).detach()  # diffusion model prediction
+            if "noise" in self.args.WT:
+                episilon = episilon - z
+
+        if "VDS" in self.args.WT:
+            wt = std ** 2
+        elif "stable" in self.args.WT:
+            wt = 1.0
+        elif "score" in self.args.WT:
+            wt = alpha_t / std
+        else:
+            assert False
+
+        detach_a = a.detach().requires_grad_(True)
+        a_joint[agent_id] = detach_a
+
+        a_joint_ordered[update_order_idx] = a.detach().clone()  # 这里是不需要梯度的
+
+        detach_a_joint = torch.cat(a_joint, dim=1)
+
+        # Dilac policy action and Q(s, a) 这里用的是JAL Q(state_tot, action_tot) s要改成concate的
+        qs = self.q[0].q0_target.both(detach_a_joint, s_joint)  
+        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0
+        self.SRPO_policy.q = torch.mean(q)
+
+
+        guidance =  torch.autograd.grad(torch.sum(q), detach_a)[0].detach()
+        # dq/da gradient
+
+        if self.args.regq:
+            guidance_norm = torch.mean(guidance ** 2, dim=-1, keepdim=True).sqrt()
+            guidance = guidance / guidance_norm
+
+        # (Q tot 对 a_i 求梯度 + score i)
+
+        loss = (episilon * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+
+        # max Q - epsilon = min epsilon - Q
+        loss = loss.mean()
+        self.SRPO_policy_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.SRPO_policy_optimizer.step()
+        self.SRPO_policy_lr_scheduler.step()
+        self.diffusion_behavior.train()
+
+        error_a = torch.mean(data['a'] - a)
+
+        if self.args.env_id == 'bandit':
+            return loss, episilon, guidance, error_a, a
+        else:
+            return loss, episilon, guidance, error_a
+
+
         
 # 第二个agent的policy维度需要调整，policy维度并没有变化
 class SRPO_ssd(nn.Module):
@@ -238,6 +312,83 @@ class SRPO_ssd(nn.Module):
         """这里为什么先把dilac的action detach再require grad？"""
         detach_a = a.detach().requires_grad_(True)
         a_joint[agent_id] = detach_a        # 把当前采样的action再放进a joint?有什么用
+
+        # 这里暂时不考虑后续or前序agent已经更新后采样的问题，
+        # 因为用了更新后的policy重新采样joitn action在2agent halfcheetah测试似乎效果不明显反而是副作用
+        detach_a_joint = torch.cat(a_joint, dim=1)
+
+        # Dilac policy action and Q(s, a) 这里用的是JAL Q(state_tot, action_tot) s是所有人concate，detach a joint 也是
+        qs = self.q[0].q0_target.both(detach_a_joint, s_joint)  
+        q = (qs[0].squeeze() + qs[1].squeeze()) / 2.0       
+        self.SRPO_policy.q = torch.mean(q)
+
+        # dq tot/da i gradient，手动保留梯度只到action这，不反传回dilac policy，这是为什么上面要detach
+        guidance =  torch.autograd.grad(torch.sum(q), detach_a)[0].detach()
+        
+
+        if self.args.regq:
+            guidance_norm = torch.mean(guidance ** 2, dim=-1, keepdim=True).sqrt()
+            guidance = guidance / guidance_norm
+
+        # (Q tot 对 a_i 求梯度 + score i)
+
+        loss = (episilon * a).sum(-1) * wt - (guidance * a).sum(-1) * self.args.beta
+
+        # max Q - epsilon = min epsilon - Q
+        loss = loss.mean()
+        self.SRPO_policy_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.SRPO_policy_optimizer.step()
+        self.SRPO_policy_lr_scheduler.step()
+        self.diffusion_behavior.train()
+
+        error_a = torch.mean(data['a'] - a)
+
+        if self.args.env_id == 'bandit':
+            return loss, episilon, guidance, error_a, a
+        else:
+            return loss, episilon, guidance, error_a
+
+    
+    # 用于扰动顺序
+    def update_SRPO_policy_ordered(self, data, agent_id, update_order_idx):
+        s = data['s']        
+        s_joint = data['s_joint'] # 用于计算Q值的condition
+        a_joint = data['a_joint'] # 用于计算Q值的action
+
+        a_joint_ordered = data['a_joint_ordered'] # 用于计算prefix action condition diffusion
+
+        self.diffusion_behavior.eval()
+        a = self.SRPO_policy(s)
+        t = torch.rand(a.shape[0], device=s.device) * 0.96 + 0.02
+        # random noising time t
+        alpha_t, std = self.marginal_prob_std(t)
+        z = torch.randn_like(a)
+        perturbed_a = a * alpha_t[..., None] + z * std[..., None]
+        # add noise to policy action, generate a_t
+
+        # prefix_actions = torch.cat(a_joint[:agent_id], dim=1)
+        prefix_actions = torch.cat(a_joint_ordered[:update_order_idx], dim=1)
+        s_condition = torch.cat((s, prefix_actions), dim=1).to(self.args.device)
+
+        with torch.no_grad():
+            episilon = self.diffusion_behavior(perturbed_a, t, s_condition).detach()  # diffusion model prediction
+            if "noise" in self.args.WT:
+                episilon = episilon - z
+
+        if "VDS" in self.args.WT:
+            wt = std ** 2
+        elif "stable" in self.args.WT:
+            wt = 1.0
+        elif "score" in self.args.WT:
+            wt = alpha_t / std
+        else:
+            assert False
+
+        """这里为什么先把dilac的action detach再require grad？"""
+        detach_a = a.detach().requires_grad_(True)
+        a_joint[agent_id] = detach_a        # 把当前采样的action再放进a joint?有什么用
+        a_joint_ordered[update_order_idx] = a.detach().clone()  # 这里是不需要梯度的
 
         # 这里暂时不考虑后续or前序agent已经更新后采样的问题，
         # 因为用了更新后的policy重新采样joitn action在2agent halfcheetah测试似乎效果不明显反而是副作用

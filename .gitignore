@@ -15,9 +15,10 @@ logs_SRPO_critic_pretrain/
 Critic_Logs/
 Diffusion_Logs/
 pretrain/
-results/
 bash/
 upload_ckpts/
+
+ablation_diffusion_Logs/
 
 
 

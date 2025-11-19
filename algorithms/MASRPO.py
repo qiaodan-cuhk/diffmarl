@@ -702,29 +702,61 @@ class OMSD(CTDE_SRPO):
 
         # 第一个agent不变，策略、score、critic都是跟CTDE一样，更新也是
         # 第二个agent仅改变score，critic和策略网络不变
-        # self.agents = [SRPO_CTDE(input_dim = self.state_dim+self.action_dim,
-        #                          output_dim=self.action_dim,
-        #                          marginal_prob_std=marginal_prob_std_fn,
-        #                          args=config),
-        #                 SRPO_ssd(input_dim = self.state_dim+self.action_dim+self.action_dim,
-        #                          output_dim=self.action_dim,
-        #                          marginal_prob_std=marginal_prob_std_fn,
-        #                          args=config)]
-        self.agents = [
-            SRPO_CTDE(
-                input_dim=self.state_dim + self.action_dim,
-                output_dim=self.action_dim,
-                marginal_prob_std=marginal_prob_std_fn,
-                args=config
-            ) if i == 0 else SRPO_ssd(
-                input_dim=self.state_dim + (i+1)*self.action_dim,
-                output_dim=self.action_dim,
-                marginal_prob_std=marginal_prob_std_fn,
-                agent_idx=i,
-                args=config
-            )
-            for i in range(self.nagents)
-        ]
+        # self.agents = [
+        #     SRPO_CTDE(
+        #         input_dim=self.state_dim + self.action_dim,
+        #         output_dim=self.action_dim,
+        #         marginal_prob_std=marginal_prob_std_fn,
+        #         args=config
+        #     ) if i == 0 else SRPO_ssd(
+        #         input_dim=self.state_dim + (i+1)*self.action_dim,
+        #         output_dim=self.action_dim,
+        #         marginal_prob_std=marginal_prob_std_fn,
+        #         agent_idx=i,
+        #         args=config
+        #     )
+        #     for i in range(self.nagents)
+        # ]
+
+        """这里需要支持conditional order来设置network的维度"""
+        # 支持指定的扰动顺序
+        conditional_order = getattr(config, "conditional_order", None)
+        if conditional_order is None:
+            conditional_order = list(range(self.nagents))
+        if isinstance(conditional_order, str):
+            conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
+        if len(conditional_order) != self.nagents:
+            raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to nagents {self.nagents}")
+        if set(conditional_order) != set(range(self.nagents)):
+            raise ValueError(f"conditional_order {conditional_order} must contain all agents 0 to {self.nagents-1}")
+        
+        self.conditional_order = conditional_order
+        # 创建映射：真实 agent_id -> 在顺序中的位置
+        self.agent_to_stage = {agent_id: stage_idx for stage_idx, agent_id in enumerate(conditional_order)}
+
+        self.agents = []
+        for i in range(self.nagents):
+            stage_idx = self.agent_to_stage[i]  # 当前 agent 在顺序中的位置
+            if stage_idx == 0:
+                # 第一个位置的 agent 使用 CTDE 结构
+                self.agents.append(SRPO_CTDE(
+                    input_dim=self.state_dim + self.action_dim,
+                    output_dim=self.action_dim,
+                    marginal_prob_std=marginal_prob_std_fn,
+                    args=config
+                ))
+            else:
+                # 后续位置的 agent 使用 ssd 结构，输入维度 = state + action + prefix_actions
+                input_dim = self.state_dim + self.action_dim + stage_idx * self.action_dim
+                self.agents.append(SRPO_ssd(
+                    input_dim=input_dim,
+                    output_dim=self.action_dim,
+                    marginal_prob_std=marginal_prob_std_fn,
+                    agent_idx=stage_idx,  # 传入在顺序中的位置
+                    args=config
+                ))
+
+
         for age in self.agents:
             age.q[0].to(self.device)
 
@@ -734,6 +766,11 @@ class OMSD(CTDE_SRPO):
         # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
         # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
 
+
+        """这里需要支持conditional order来设置joint a和joint s的维度"""
+
+
+        
         joint_a = []
         joint_s = []
         for agent_id, current_agent in enumerate(self.agents):
@@ -782,6 +819,103 @@ class OMSD(CTDE_SRPO):
                 loss_tot, episilon, guidance, error_a, a_plt_i = current_agent.update_SRPO_policy(sample_bridge, agent_id)
             else:
                 loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+                
+            if self.config.env_id == 'bandit':
+                epi_all.append(episilon)
+                guide_all.append(guidance)
+                a_plt_all.append(a_plt_i)
+            
+            """ logging metric """
+            if t % self.logging_interval == 0 and not self.no_log:
+                dic = {}
+                dic.update({"SEQ/SRPO loss"+str(agent_id): loss_tot.item()})
+                dic.update({"SEQ/action errors"+str(agent_id): error_a.item()})
+                # dic.update({"diffusion loss"+str(agent_i): epsilon})
+                # dic.update({"Q gradient"+str(agent_i): guidance})
+                
+                log_and_print(list(dic.keys()), list(dic.values()), t, writer, multi=True)
+
+                # if run is not None:
+                #     run.log({"SEQ/SRPO loss"+str(agent_id): loss_tot.item(),
+                #             "SEQ/action errors"+str(agent_id): error_a.item()})
+                
+        
+        if self.config.env_id == 'bandit':
+            return epi_all, guide_all, a_plt_all
+
+
+    def update_ordered(self, samples, t, writer, run):
+        # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
+        # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
+        # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
+
+        
+        # 这里只调用dilac policy生成联合动作获取梯度，所以不需要按照condition order
+        joint_a = []
+        joint_s = []
+        for agent_id, current_agent in enumerate(self.agents):
+            s = samples[agent_id]['obs']
+            current_agent.diffusion_behavior.eval()
+            """这里使用的是局部obs而不是全局state，mamujoco和mpe都是"""
+            # 每个agent的dilac policy输出动作，用作计算Q值的joint actions，detach gradients且不需要添加gradient
+            a_curr = self.agents[agent_id].SRPO_policy(s).detach()   
+            joint_s.append(s)
+            joint_a.append(a_curr)  
+        # 最后得到的joint_s = [obs, obs, obs]  joint_a = [a0, a1, a2]
+            
+        joint_states = torch.cat(joint_s, dim=1)  # [3*obs, 1]
+
+        # joint_states = torch.cat((samples[0]["obs"], samples[1]["obs"]), axis=1)
+        # joint a = [a1, a2], feed in for qs = q[0].target(joint a, joint s)
+        if self.config.env_id == 'bandit':
+            epi_all = []
+            guide_all = []
+            a_plt_all = []
+        
+        # 额外配置一个按照order顺序的joint action
+        joint_a_ordered = []
+        for agent_id in self.conditional_order:
+            joint_a_ordered.append(joint_a[agent_id])
+        # joint_a_ordered = torch.cat(joint_a_ordered, dim=1)
+
+
+        """这里的顺序更新，需要考虑conditional order来采样prefix agent的动作"""
+        # 这里需要按照order顺序更新
+        # for agent_id, current_agent in enumerate(self.agents):
+        # for order_agent_id in self.conditional_order:
+        for update_idx, agent_id in enumerate(self.conditional_order):
+            # agent_id = self.conditional_order.index(order_agent_id)
+            current_agent = self.agents[agent_id]
+            # get data i with joint s+a
+            if self.is_mamujoco:
+                sample_bridge = {"s": samples[agent_id]["obs"],
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_obs"],
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                                "a_joint_ordered": joint_a_ordered,
+                }
+            else:
+                sample_bridge = {"s": samples[agent_id]["obs"],  # MPE 也是 obs 不是 state
+                                "a": samples[agent_id]["action"],
+                                "r": samples[agent_id]["rewards"],
+                                "s_": samples[agent_id]["next_obs"],  # MPE 也是 obs 不是 state
+                                "d": samples[agent_id]["done"],
+                                "s_joint": joint_states,
+                                "a_joint": joint_a,
+                                "a_joint_ordered": joint_a_ordered,
+                }
+
+            
+            # Use Joint Q/A and individual score to update
+            if self.config.env_id == 'bandit':
+                loss_tot, episilon, guidance, error_a, a_plt_i = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+            else:
+                # loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy(sample_bridge, agent_id)
+                # 按照条件顺序更新
+                loss_tot, episilon, guidance, error_a = current_agent.update_SRPO_policy_ordered(sample_bridge, agent_id, update_idx)
                 
             if self.config.env_id == 'bandit':
                 epi_all.append(episilon)

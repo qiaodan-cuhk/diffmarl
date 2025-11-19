@@ -15,7 +15,6 @@ from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
 
 
-
 # try:
 #     from multiagent_mujoco.mujoco_multi import MujocoMulti
 # except:
@@ -144,100 +143,179 @@ def train_joint_behavior(args, score_model, data_loader, writer, start_epoch=0):
             torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "JAL", "diffusion_{}.pth".format(epoch)))
             # SRPO_premodels/env_id_level/JAL/diffusion_150.pth
 
+# 默认012顺序
+# def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_epoch=0):
+
+#     n_epochs = 200
+#     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
+#     evaluation_inerval = args.log_interval  # 1
+#     epoch_save_interval = args.save_interval  # 50
+#     best_loss = 1e3
+
+
+#     if agent_num == 0:
+
+#         for epoch in tqdm_epoch:
+#             avg_loss = 0.
+#             num_items = 0
+#             for step_in_epoch in range(10000):
+#                 data = data_loader.sample(args.batch_size)
+#                 data_i = data[agent_num]
+#                 loss2 = score_model.update_behavior(data_i)
+#                 avg_loss += score_model.loss.detach().cpu().numpy()
+#                 num_items += 1
+#                 writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+#             tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+
+#             epoch_loss = score_model.loss.detach().cpu().numpy()
+#             writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+#             """ Log by tensorboard"""
+#             if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+#                 writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+#                 writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+#                 # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+            
+#             """ Save models """
+#             # if args.save_model and epoch_loss < best_loss:
+#             #     best_loss = epoch_loss
+#             #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+#             #     torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
+#             #     # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
+            
+#             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+#                 print("Save models: Epoch {}".format(epoch))
+#                 torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{args.env_id}_{args.data_type}_Seq", "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
+#                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
+#     elif agent_num > 0:
+#         for epoch in tqdm_epoch:
+#             avg_loss = 0.
+#             num_items = 0
+#             for step_in_epoch in range(10000):
+#                 data = data_loader.sample(args.batch_size)
+#                 data_i = data[agent_num]
+
+#                 # 收集所有前序agents的action
+#                 prev_actions = []
+#                 prev_next_actions = []
+#                 for prev_agent in range(agent_num):
+#                     prev_actions.append(data[prev_agent]['action'])
+#                     prev_next_actions.append(data[prev_agent]['next_action'])
+                
+#                 # 将前序agents的action连接到当前agent的观察中
+#                 data_i['obs'] = torch.cat([data_i['obs']] + prev_actions, dim=1).to(args.device)
+#                 data_i['next_obs'] = torch.cat([data_i['next_obs']] + prev_next_actions, dim=1).to(args.device)
+
+
+#                 loss2 = score_model.update_behavior(data_i)
+#                 avg_loss += score_model.loss.detach().cpu().numpy()
+#                 num_items += 1
+#                 writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+#             tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+
+#             epoch_loss = score_model.loss.detach().cpu().numpy()
+#             writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+
+#             """ Log by tensorboard"""
+#             if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+#                 writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+#                 writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+#                 # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+
+#             """ Save models """
+#             # if args.save_model and epoch_loss < best_loss:
+#             #     best_loss = epoch_loss
+#             #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+#             #     torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
+#             #     # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
+            
+#             if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+#                 print("Save models: Epoch {}".format(epoch))
+#                 torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{args.env_id}_{args.data_type}_Seq", "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
+#                 # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
+
+
 
 def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_epoch=0):
+
+    # 支持指定的扰动顺序
+    conditional_order = getattr(args, "conditional_order", None)
+    if conditional_order is None:
+        conditional_order = list(range(args.agent_num))
+
+    if isinstance(conditional_order, str):
+        conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
+
+    if len(conditional_order) != args.agent_num:
+        raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to agent_num {args.agent_num}")
+    if agent_num not in conditional_order:
+        raise ValueError(f"agent {agent_num} is not in conditional_order {conditional_order}")
+
+    agent_idx = conditional_order.index(agent_num)
+    prefix_agent_idx = conditional_order[:agent_idx]
+
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = args.log_interval  # 1
     epoch_save_interval = args.save_interval  # 50
     best_loss = 1e3
 
-    if agent_num == 0:
+ 
 
-        for epoch in tqdm_epoch:
-            avg_loss = 0.
-            num_items = 0
-            for step_in_epoch in range(10000):
-                data = data_loader.sample(args.batch_size)
-                data_i = data[agent_num]
-                loss2 = score_model.update_behavior(data_i)
-                avg_loss += score_model.loss.detach().cpu().numpy()
-                num_items += 1
-                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
-            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
 
-            epoch_loss = score_model.loss.detach().cpu().numpy()
-            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+    for epoch in tqdm_epoch:
+        avg_loss = 0.
+        num_items = 0
+        for step_in_epoch in range(10000):
+            data = data_loader.sample(args.batch_size)
 
-            """ Log by tensorboard"""
-            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
-                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
-                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
-                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+            # 这里保证取出来要训练的agent的数据
+            data_i = data[agent_num]
+
+            # 收集所有前序agents的action进行拼接
+            prev_actions = []
+            prev_next_actions = []
+            for prev_agent in prefix_agent_idx:
+                prev_actions.append(data[prev_agent]['action'])
+                prev_next_actions.append(data[prev_agent]['next_action'])
             
-            """ Save models """
-            if args.save_model and epoch_loss < best_loss:
-                best_loss = epoch_loss
-                print("New lowest loss in epoch {}, Save best models".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
-                # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
-            
-            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
-                print("Save models: Epoch {}".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
-                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
-    elif agent_num > 0:
-        for epoch in tqdm_epoch:
-            avg_loss = 0.
-            num_items = 0
-            for step_in_epoch in range(10000):
-                data = data_loader.sample(args.batch_size)
-                data_i = data[agent_num]
-
-                # 收集所有前序agents的action
-                prev_actions = []
-                prev_next_actions = []
-                for prev_agent in range(agent_num):
-                    prev_actions.append(data[prev_agent]['action'])
-                    prev_next_actions.append(data[prev_agent]['next_action'])
-                
-                # 将前序agents的action连接到当前agent的观察中
-                data_i['obs'] = torch.cat([data_i['obs']] + prev_actions, dim=1).to(args.device)
-                data_i['next_obs'] = torch.cat([data_i['next_obs']] + prev_next_actions, dim=1).to(args.device)
+            # 将前序agents的action连接到当前agent的观察中
+            data_i['obs'] = torch.cat([data_i['obs']] + prev_actions, dim=1).to(args.device)
+            data_i['next_obs'] = torch.cat([data_i['next_obs']] + prev_next_actions, dim=1).to(args.device)
 
 
-                loss2 = score_model.update_behavior(data_i)
-                avg_loss += score_model.loss.detach().cpu().numpy()
-                num_items += 1
-                writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
-            tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
+            loss2 = score_model.update_behavior(data_i)
+            avg_loss += score_model.loss.detach().cpu().numpy()
+            num_items += 1
+            writer.add_scalar('agent {}/episode loss'.format(agent_num), loss2, step_in_epoch)
+        tqdm_epoch.set_description('Average Loss of Agent {}: {:5f}'.format(agent_num, avg_loss / num_items))
 
-            epoch_loss = score_model.loss.detach().cpu().numpy()
-            writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
+        epoch_loss = score_model.loss.detach().cpu().numpy()
+        writer.add_scalar("agent {}/lr".format(agent_num), score_model.diffusion_optimizer.state_dict()['param_groups'][0]['lr'], epoch+1)
 
-            """ Log by tensorboard"""
-            if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
-                writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
-                writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
-                # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
+        """ Log by tensorboard"""
+        if (epoch % evaluation_inerval == (evaluation_inerval -1)) or epoch==0:
+            writer.add_scalar('agent {}/epoch loss'.format(agent_num), epoch_loss, epoch+1)
+            writer.add_scalar('agent {}/mean epoch loss'.format(agent_num), avg_loss / num_items, epoch+1)
+            # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
 
-            """ Save models """
-            if args.save_model and epoch_loss < best_loss:
-                best_loss = epoch_loss
-                print("New lowest loss in epoch {}, Save best models".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
-                # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
-            
-            if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
-                print("Save models: Epoch {}".format(epoch))
-                torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
-                # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
+        """ Save models """
+        # if args.save_model and epoch_loss < best_loss:
+        #     best_loss = epoch_loss
+        #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+        #     torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_Seq", "best_diffusion_agent{}.pth".format(agent_num)))
+        #     # SRPO_premodels/env_id_level/Seq/best_diffusion_i.pth
+        
+        if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+            print("Save models: Epoch {}".format(epoch))
+            torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{args.env_id}_{args.data_type}_Seq", args.conditional_order, "diffusion_agent{}_epoch{}.pth".format(agent_num, epoch)))
+            # SRPO_premodels/env_id_level/Seq/diffusion_i_epoch150.pth   
  
 
         
 
 def behavior(args):
-    tmp_dir = "/data/qiaodan/code/diffmarl/pretrain/omiga"
+    tmp_dir = "/data/qiaodan/code/diffmarl/pretrain/omiga_appendix"
     if not os.path.exists(tmp_dir):
         os.makedirs(tmp_dir)
 
@@ -287,6 +365,7 @@ def behavior(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    args.agent_num = agent_num
 
     marginal_prob_std_fn = functools.partial(marginal_prob_std, device=args.device,beta_1=20.0)
     args.marginal_prob_std_fn = marginal_prob_std_fn
@@ -300,15 +379,39 @@ def behavior(args):
         # score_model= [MASRPO_Behavior(input_dim=state_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device),
         #               MASRPO_Behavior(input_dim=state_dim+action_dim+action_dim, output_dim=action_dim, marginal_prob_std=marginal_prob_std_fn, args=args).to(args.device)]
         # 第一个srpo p(a1|s)， 第二个Srpo p(a2|s,a1)
-        score_model = [
-                        MASRPO_Behavior(
-                            input_dim=state_dim + action_dim + (i * action_dim if i > 0 else 0),
+
+        # 现在需要支持任意扰动顺序的score model
+
+        # score_model = [
+        #                 MASRPO_Behavior(
+        #                     input_dim=state_dim + action_dim + (i * action_dim if i > 0 else 0),
+        #                     output_dim=action_dim,
+        #                     marginal_prob_std=marginal_prob_std_fn,
+        #                     args=args
+        #                 ).to(args.device)
+        #                 for i in range(agent_num)
+        #             ]
+
+        # 支持指定的扰动顺序
+        conditional_order = getattr(args, "conditional_order", None)
+        if conditional_order is None:
+            conditional_order = list(range(args.agent_num))
+        if isinstance(conditional_order, str):
+            conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
+        if len(conditional_order) != args.agent_num:
+            raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to agent_num {args.agent_num}")
+        if args.seq_agent_id not in conditional_order:
+            raise ValueError(f"agent {args.seq_agent_id} is not in conditional_order {conditional_order}")
+
+        agent_order_idx = conditional_order.index(args.seq_agent_id)
+
+        score_model = MASRPO_Behavior(
+                            input_dim=state_dim + action_dim + (agent_order_idx * action_dim if agent_order_idx > 0 else 0),
                             output_dim=action_dim,
                             marginal_prob_std=marginal_prob_std_fn,
                             args=args
                         ).to(args.device)
-                        for i in range(agent_num)
-                    ]
+                    
 
 
     if args.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'bandit']:
@@ -342,7 +445,7 @@ def behavior(args):
 
     """ Train Log Dir """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tb_log_path = os.path.join("/data/qiaodan/code/diffmarl/Diffusion_Logs",
+    tb_log_path = os.path.join("/data/qiaodan/code/diffmarl/ablation_diffusion_Logs",
                                "{}".format(str(args.env_id)),
                                "{}".format(args.data_type),
                                "{}_agent{}_{}".format(args.srpo_mode, args.seq_agent_id, timestamp))
@@ -354,8 +457,8 @@ def behavior(args):
     # writer = SummaryWriter(log_dir=tb_log_path)
 
     """ Model Saving Dir """
-    if not os.path.exists(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_{args.srpo_mode}")):
-        os.makedirs(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga", f"{args.env_id}_{args.data_type}_{args.srpo_mode}"))
+    if not os.path.exists(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{args.env_id}_{args.data_type}_{args.srpo_mode}", args.conditional_order)):
+        os.makedirs(os.path.join("/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{args.env_id}_{args.data_type}_{args.srpo_mode}", args.conditional_order))
 
 
     print("training behavior")
@@ -366,7 +469,7 @@ def behavior(args):
         train_joint_behavior(args, score_model, replay_buffer, writer, start_epoch=0)
     elif args.srpo_mode == 'Seq':
         agent_id = args.seq_agent_id
-        train_seq_behavior(args, score_model[agent_id], replay_buffer, agent_id, writer, start_epoch=0)
+        train_seq_behavior(args, score_model, replay_buffer, agent_id, writer, start_epoch=0)
     print("finished")
 
 
@@ -409,6 +512,8 @@ def pretrain_behavior_args():
     # continuous MPE default False
     parser.add_argument("--discrete_action", action='store_true', default=False)
 
+    parser.add_argument("--conditional_order", default="1-2-0", type=str)
+
     # mixed datasets
     # parser.add_argument("--mixed_data", action='store_true', default=False)
 
@@ -438,6 +543,11 @@ def pretrain_behavior_args():
         config.device = f"cuda:{config.device}"
     else:
         config.device = "cpu"
+
+
+
+    # 支持指定的扰动顺序
+    # config.conditional_order = str("1-2-0")
 
     return config
 

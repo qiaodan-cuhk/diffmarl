@@ -5,7 +5,7 @@ seeds=(42)
 ## algo seletion
 difftype="SRPO"     # DQL
 marltype="SEQ"      
-TASK="HalfCheetah-v2"
+TASK="Hopper-v2"
 trainsteps=1000000
 
 devices=(1 2 3 4 5)  # 可用的GPU设备列表
@@ -16,6 +16,9 @@ diffusion_epoch_num=179
 critic_epoch_num=179
 
 pretrain_model_path="/data/qiaodan/code/diffmarl/pretrain/omiga/"
+
+
+conditional_order="2-1-0"   # 0-2-1
 
 # 初始化计数器
 counter=0

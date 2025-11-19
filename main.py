@@ -346,7 +346,8 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type, epoch_num):
                 if epoch_num == 'best':
                     load_path_i = os.path.join(load_path, 'diffusion', f'best_diffusion_agent{agent_index}.pth')
                 else:
-                    load_path_i = os.path.join(load_path, 'diffusion', f'diffusion_agent{agent_index}_epoch{epoch_num}.pth')    
+                    # load_path_i = os.path.join(load_path, 'diffusion', f'diffusion_agent{agent_index}_epoch{epoch_num}.pth') 
+                    load_path_i = os.path.join(load_path, f'diffusion_agent{agent_index}_epoch{epoch_num}.pth')    # 用于
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
@@ -429,6 +430,21 @@ def offline_train(config):
     kwargs={'logging_interval': config.logging_interval,
             'no_log': config.no_log,
             'train_num_steps': config.num_steps}
+
+
+
+    # # 支持指定的扰动顺序
+    # conditional_order = getattr(config, "conditional_order", None)
+    # if conditional_order is None:
+    #     conditional_order = list(range(config.agent_num))
+
+    # if isinstance(conditional_order, str):
+    #     conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
+
+    # if len(conditional_order) != config.agent_num:
+    #     raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to agent_num {config.agent_num}")
+    # if agent_num not in conditional_order:
+    #     raise ValueError(f"agent {agent_num} is not in conditional_order {conditional_order}")
 
 
     # select algorithms from [JAL, ind, seq, VD] + [DiffusionQL, SRPO]
@@ -545,16 +561,17 @@ def offline_train(config):
         writer = SummaryWriter(outdir)
         config_log_dict = {"env": config.env_id,
                            "dataset": "{}".format(config.data_type),
-                           "dataset_ave_reward": replay_buffer.ave_reward,
+                           "dataset_ave_reward": float(replay_buffer.ave_reward),
                            "algo": algo_name,
                            "seed": config.seed,
-                           "beta": config.beta,
+                           "beta": float(config.beta),
+                           "sequential_update_order": config.conditional_order,
                            "Diffusion Epoch":config.diff_epoch,
                            "Critic Epoch":config.critic_epoch,
                            "Denoise_steps": config.T,
                            "batch size": config.batch_size,
-                           "discount factor": config.gamma,
-                           "soft update": config.tau,
+                           "discount factor": float(config.gamma),
+                           "soft update": float(config.tau),
                            "IDQN hidden MLP": config.resnet_hidden_dim,
                            "IDQN state-action embed": config.resnet_hidden_dim,
                            "IDQN actor block": config.actor_blocks,
@@ -622,7 +639,11 @@ def offline_train(config):
             samples = replay_buffer.sample(config.batch_size, to_gpu=config.use_gpu)
             # 只拿agent i自己的buffer，并只更新a i策略; 但是计算Q值用的是total state，以及other policy actions
             # 一起输入给进去再分开，更新体现在ma agent内部
-            ma_agent.update(samples, t, writer, run)
+
+            # 原始的默认顺序更新
+            # ma_agent.update(samples, t, writer, run)
+            # 支持指定的扰动顺序
+            ma_agent.update_ordered(samples, t, writer, run)
         else:  # QMIX_SRPO
             pass 
             
@@ -722,6 +743,8 @@ if __name__ == '__main__':
     parser.add_argument('--iql_critic_lr', type=float, default=3e-4)
     ##################################################
     parser.add_argument('--save_eval_buffer', action='store_true')
+
+    parser.add_argument("--conditional_order", default=None, type=str)
     
     config = parser.parse_args()
 
@@ -747,6 +770,8 @@ if __name__ == '__main__':
         config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
         config.diffusion_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
 
+    if config.conditional_order is not None:
+        config.diffusion_load_path = os.path.join(f"/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{config.env_id}_{config.data_type}_Seq", config.conditional_order)
 
     # make envs params
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:

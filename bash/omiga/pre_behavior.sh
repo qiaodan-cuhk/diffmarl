@@ -10,14 +10,17 @@ datatypes=("expert" "medium" "medium-replay" "medium-expert")  # "expert" "mediu
 ## algo selection
 # difftype="SRPO"     # DQL
 marltype="Seq"      # default Seq, Can train JAL, IND, CTDE
-TASK="Ant-v2"
-devices=(2 3 4 5)  # 可用的GPU设备列表
-agent_idx=(0 1) # 用于指定train agent id
+TASK="Hopper-v2"
+devices=(0 1 2 3 4 5)  # 可用的GPU设备列表
+agent_idx=(0 1 2) # 用于指定train agent id
 # agent_idx=(0)
 
 # 初始化计数器
 counter=0
 total_devices=${#devices[@]}
+
+conditional_order="0-2-1"
+# conditional_order="2-1-0"
 
 for types in "${datatypes[@]}"
 do
@@ -28,7 +31,7 @@ do
         current_device=${devices[$device_index]}
         
         echo "data types: $types, device: $current_device, training agent id: $agent"
-        python /data/qiaodan/code/diffmarl/pretrain_behavior.py --env_id $TASK --data_type $types --device $current_device --srpo_mode $marltype --seq_agent_id $agent &
+        python /data/qiaodan/code/diffmarl/pretrain_behavior.py --env_id $TASK --data_type $types --device $current_device --srpo_mode $marltype --seq_agent_id $agent --conditional_order $conditional_order &
         
         # 增加计数器
         counter=$((counter + 1))
