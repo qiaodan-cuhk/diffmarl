@@ -1,5 +1,8 @@
 """ This file is used for load pretrained diffusion models and critic models and evaluate their performance """
 
+# used for visualize bandit trajectory
+
+
 import numpy as np
 import torch
 import gym

@@ -346,8 +346,8 @@ def load_SRPO_diffusion(srpo_model, load_path, srpo_type, epoch_num):
                 if epoch_num == 'best':
                     load_path_i = os.path.join(load_path, 'diffusion', f'best_diffusion_agent{agent_index}.pth')
                 else:
-                    # load_path_i = os.path.join(load_path, 'diffusion', f'diffusion_agent{agent_index}_epoch{epoch_num}.pth') 
-                    load_path_i = os.path.join(load_path, f'diffusion_agent{agent_index}_epoch{epoch_num}.pth')    # 用于
+                    load_path_i = os.path.join(load_path, 'diffusion', f'diffusion_agent{agent_index}_epoch{epoch_num}.pth') 
+                    # load_path_i = os.path.join(load_path, f'diffusion_agent{agent_index}_epoch{epoch_num}.pth')    # 用于 ordered
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.load_state_dict({k:v for k,v in ckpt.items() if "diffusion_behavior" in k}, strict=False)
         elif srpo_type == 'JAL':
@@ -367,7 +367,11 @@ def offline_train(config):
     # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
-        outdir = os.path.join(config.dir, "omiga", config.env_id, unique_token)
+        if config.conditional_order is not None:
+            outdir = os.path.join(config.dir, "omiga", config.env_id, config.conditional_order, unique_token)
+        else:
+            outdir = os.path.join(config.dir, "omiga", config.env_id, "unordered", unique_token)
+        # outdir = os.path.join(config.dir, "omiga", config.env_id, config.conditional_order, unique_token)
         os.makedirs(outdir)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
     
@@ -546,10 +550,14 @@ def offline_train(config):
             [env_info['obs_shape'] for _ in env.observation_space],
             [acsp.shape[0] for acsp in env.action_space],
             is_mamujoco=True,
-            state_dims=[env_info['state_shape'] for _ in env.observation_space], device = config.device
+            state_dims=[env_info['state_shape'] for _ in env.observation_space], device = config.device, store_on_gpu=True
         )
-    # replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
-    replay_buffer.load_batch_data_omiga(config.dataset_dir, rew_scale = config.rew_scale)
+
+    
+    if config.env_id in ['simple_spread', 'simple_tag', 'simple_world', 'bandit']:
+        replay_buffer.load_batch_data(config.dataset_dir, rew_scale = config.rew_scale)
+    elif config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2']:
+        replay_buffer.load_batch_data_omiga(config.dataset_dir, rew_scale = config.rew_scale)
 
     if np.isinf(replay_buffer.ave_reward):   # 如果变量是 inf, 代表这条轨迹没有 done=True，要进行 scale; 应该是主要用于MPE环境
         replay_buffer.ave_reward = replay_buffer.sum_reward / (replay_buffer.filled_i/config.episode_length)
@@ -643,7 +651,10 @@ def offline_train(config):
             # 原始的默认顺序更新
             # ma_agent.update(samples, t, writer, run)
             # 支持指定的扰动顺序
-            ma_agent.update_ordered(samples, t, writer, run)
+            if config.conditional_order is not None:
+                ma_agent.update_ordered(samples, t, writer, run)
+            else:
+                ma_agent.update(samples, t, writer, run)
         else:  # QMIX_SRPO
             pass 
             
@@ -797,9 +808,9 @@ if __name__ == '__main__':
     else:  # MaMujoco
         # config.num_steps = int(1e6)
         config.steps_per_update = 10 # 也没用
-        config.eval_interval = 5000
+        config.eval_interval = 10000
         config.save_buffer_interval = 25000
-        config.logging_interval = 5000
+        config.logging_interval = 10000
         config.episode_length = 1000
         config.gamma=0.99
         config.lr = 0.0003  # 并没有进入 SRPO，只在DDPG上
