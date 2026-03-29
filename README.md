@@ -44,6 +44,12 @@ ERROR: could not initialize GLFW
 Press Enter to exit ...
 ```
 
+Install Multi-agent in envs
+```
+cd diffmarl/envs/multiagent-particle-envs
+pip install -e .
+```
+
 
 ## Source Repo
 From Diffusion-QL
