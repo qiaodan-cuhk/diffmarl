@@ -677,7 +677,7 @@ if __name__ == '__main__':
     # Dataset selection  e.g. "simple spread_medium_0"
     parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
     parser.add_argument("--data_type", default='expert', type=str)
-    # parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
+    # parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")   # used for MPE datasets
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
@@ -720,6 +720,7 @@ if __name__ == '__main__':
     # params for evaluation
     parser.add_argument('--eval_episodes', default=10, type=int)
     parser.add_argument('--eval_interval', default=10000, type=int)
+    parser.add_argument('--save_eval_buffer', action='store_true')
 
     # training steps
     parser.add_argument('--num_steps', default=int(5e5), type=int)

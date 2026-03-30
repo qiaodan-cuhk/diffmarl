@@ -781,11 +781,6 @@ class OMSD_GMM(CTDE_SRPO_GMM):
         # Loss i = Q(s, a-, a, a+) + beta score i，这里所有人的action是由每个人的policy采样出来的，dilac policy所以是确定性的
         # 每个 agent 计算 Q value 都拿到别人policy进行sample，或者输入之前每个人都用当前policy sample构造当前的joint action给所有人一起使用
         # CTDE 不需要考虑 sequential 问题，给定s直接所有人take action
-
-
-        """这里需要支持conditional order来设置joint a和joint s的维度"""
-
-
         
         joint_a = []
         joint_s = []

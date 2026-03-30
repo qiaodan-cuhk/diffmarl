@@ -19,6 +19,11 @@ from torch.autograd import Variable
 # from tensorboard_logger import log_value, configure
 from torch.utils.tensorboard import SummaryWriter
 
+import sys
+from pathlib import Path
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 from utils.make_env import make_env
 from utils.buffer import ReplayBuffer
@@ -319,7 +324,8 @@ def load_SRPO_critic(srpo_model, load_path, srpo_type, epoch_num):
                 if epoch_num == 'best':
                     load_path_i = os.path.join(load_path, 'critic', f'best_critic.pth')
                 else:
-                    load_path_i = os.path.join(load_path, 'critic', f'critic_epoch{epoch_num}.pth')
+                    # load_path_i = os.path.join(load_path, 'critic', f'critic_epoch{epoch_num}.pth')   # used for OMIGA
+                    load_path_i = os.path.join(load_path, 'JAL', f'critic_epoch{epoch_num}.pth')  # used for MPE
                 ckpt = torch.load(load_path_i, map_location=srpo_model.device)
                 srpo_i.q[0].load_state_dict(ckpt)
 
@@ -365,16 +371,16 @@ def load_SRPO_GMM(srpo_model, load_path, srpo_type, epoch_num):
 
 
 def offline_train(config):
-    unique_token = "{}_{}_beta{}_critic{}_seed{}_{}".format(config.marltype, config.data_type, config.beta, config.critic_epoch, config.seed, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f"))
+    unique_token = f"{config.marltype}_{config.data_type}_beta{config.beta}_critic{config.critic_epoch}_{config.n_gmm_components}GMM_seed{config.dataset_num}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')}"
 
     # unique_token = config.marltype+"_"+unique_token
     # JAL/IND/VD/SEQ _ time _ seed 
 
     if not config.no_log:
-        if config.conditional_order is not None:
-            outdir = os.path.join(config.dir, "omiga", config.env_id, config.conditional_order, unique_token)
-        else:
-            outdir = os.path.join(config.dir, "omiga", config.env_id, "unordered", unique_token)
+        # if config.conditional_order is not None:
+        #     outdir = os.path.join(config.dir, "omiga", config.env_id, config.conditional_order, unique_token)
+        # else:
+        outdir = os.path.join(config.dir, "gmm", config.env_id, unique_token)
         # outdir = os.path.join(config.dir, "omiga", config.env_id, config.conditional_order, unique_token)
         os.makedirs(outdir)
         print('\033[1;32mOutput files are saved in {} \033[1;0m'.format(outdir))
@@ -532,14 +538,15 @@ def offline_train(config):
         print('Critic models are not loaded to SRPO')
 
     if config.gmm_load_path is not None:
-        load_SRPO_GMM(srpo_model=ma_agent, load_path=config.gmm_load_path, srpo_type=config.marltype, epoch_num=config.diff_epoch)
+        load_SRPO_GMM(srpo_model=ma_agent, load_path=config.gmm_load_path, srpo_type=config.marltype, epoch_num=config.gmm_epoch)
         print('Diffusion models are loaded to SRPO')
     else:
         print('Diffusion models are not loaded to SRPO')
 
     # load pretrained preys model to DDPG
     if config.env_id in ['simple_tag', 'simple_world']:
-        pretrained_model_dir = './datasets/{}/pretrained_adv_model.pt'.format(config.env_id)
+        # pretrained_model_dir = './datasets/{}/pretrained_adv_model.pt'.format(config.env_id)
+        pretrained_model_dir = str(_root / "datasets" / config.env_id / "pretrained_adv_model.pt")
         ma_agent.load_pretrained_preys(pretrained_model_dir)
     else:
         print('Prey DDPG are not loaded')
@@ -581,7 +588,7 @@ def offline_train(config):
                            "seed": config.seed,
                            "beta": float(config.beta),
                            "sequential_update_order": config.conditional_order,
-                           "Diffusion Epoch":config.diff_epoch,
+                           "Diffusion Epoch":config.gmm_epoch,
                            "Critic Epoch":config.critic_epoch,
                            "Denoise_steps": config.T,
                            "batch size": config.batch_size,
@@ -619,7 +626,10 @@ def offline_train(config):
         if t % config.eval_interval == 0 or t == config.num_steps:
             # eval_policy will set rollouts at start
             print('Start to {} times eval | Timestep:{}'.format(t % config.eval_interval, t))
-            eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=config.env_args)
+            if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
+                eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action)
+            elif config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2']:
+                eval_return, eval_data = eval_policy(ma_agent, config.env_id, config.seed, config.eval_episodes, config.discrete_action, device='cpu', env_args=config.env_args)
             if not config.no_log:
                 log_and_print('eval_return', eval_return, t, writer)
                 log_and_print('normed_eval_return', eval_return/replay_buffer.ave_reward, t, writer)
@@ -682,15 +692,20 @@ if __name__ == '__main__':
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
+    parser.add_argument("--env_id", default='simple_tag', type=str, help="Name of environment")   # HalfCheetah-v2  bandit
     parser.add_argument("--data_type", default='expert', type=str)
-    # parser.add_argument("--dataset_num", default=1, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
     
     # Algo choice: Diffusion QL or SRPO
     parser.add_argument("--difftype", default='SRPO') # DQL for Diffusion-QL, SRPO for SRPO algo
     # JAL for joint action learning CTCE, IND for independent learning, VD for QMIX decomposition, SEQ for sequential update/regularization
     parser.add_argument("--marltype", default='SEQ') # JAL, IND, CTDE, SEQ
-    parser.add_argument("--diff_epoch", default=159)  # 49,99,149
+    # parser.add_argument("--diff_epoch", default=159)  # 49,99,149  used for diffusion model
+    
+    # params for GMM
+    parser.add_argument("--gmm_epoch", default=19)  # 49,99,149  used for GMM model
+    parser.add_argument("--n_gmm_components", default=4, type=int, help="GMM mixture size K (MASRPO_Behavior_GMM)")
+    parser.add_argument("--gmm_hidden_dim", default=512, type=int, help="ConditionalGMM MLP hidden dim")
     parser.add_argument("--critic_epoch", default=179)  # 19,39,59,79,99,119,139,159,179,199
 
 
@@ -739,7 +754,7 @@ if __name__ == '__main__':
 
     # regularization para
     parser.add_argument('--beta', type=float, default=0.01)  
-    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/pretrain/omiga/')
+    parser.add_argument('--pretrain_model_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels')
     # parser.add_argument('--critic_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/')  # HalfCheetah-v2_expert
     # parser.add_argument('--gmm_load_path', type=str, default='/data/qiaodan/code/diffmarl/SRPO_premodels/HalfCheetah-v2') # HalfCheetah-v2_expert
     parser.add_argument('--WT', type=str, default="VDS")
@@ -761,7 +776,6 @@ if __name__ == '__main__':
     parser.add_argument('--iql_critic_lr', type=float, default=3e-4)
     ##################################################
     parser.add_argument('--save_eval_buffer', action='store_true')
-
     parser.add_argument("--conditional_order", default=None, type=str)
     
     config = parser.parse_args()
@@ -784,18 +798,18 @@ if __name__ == '__main__':
         config.device = "cpu"
     
     # dataset premodel path
-    if config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2', 'simple_spread', 'simple_tag', 'simple_world']:
-        config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
-        config.gmm_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
+    # if config.env_id in ['HalfCheetah-v2', 'Hopper-v2', 'Ant-v2']:
+    #     config.critic_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
+    #     config.gmm_load_path = config.pretrain_model_path + f"{config.env_id}_{config.data_type}"
+    if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
+        config.critic_load_path = os.path.join(config.pretrain_model_path, f"{config.env_id}_{config.data_type}_seed{config.dataset_num}")
+        config.gmm_load_path = f"/data/qiaodan/code/diffmarl/pretrain/gmm/{config.n_gmm_components}_GMM/{config.env_id}_{config.data_type}_Seq"
 
-    # 用于带order的实验，GMM不考虑
-    if config.conditional_order is not None:
-        config.gmm_load_path = os.path.join(f"/data/qiaodan/code/diffmarl/pretrain/omiga_appendix", f"{config.env_id}_{config.data_type}_Seq", config.conditional_order)
 
     # make envs params
     if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
         config.lr=0.005
-        # config.num_steps = 200000
+        config.num_steps = 200000
         # config.n_policy_epochs = 20
         config.eval_interval = 500
         config.save_buffer_interval = 25000
@@ -834,20 +848,34 @@ if __name__ == '__main__':
     #     config.dataset_dir = config.dataset_dir + '/' + config.env_id + '/' + config.data_type + '/' + 'seed_{}_data'.format(config.dataset_num)
 
     # 只用于omiga
-    if config.env_id == "HalfCheetah-v2":      
-        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
-    elif config.env_id == "Ant-v2":
-        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x4', "agent_obsk": 1,}  # 需要更新确认
-    elif config.env_id == "Hopper-v2":
-        config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '3x1', "agent_obsk": 1,} 
+    # if config.env_id == "HalfCheetah-v2":      
+    #     config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '6x1', "agent_obsk": 1,}
+    # elif config.env_id == "Ant-v2":
+    #     config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '2x4', "agent_obsk": 1,}  # 需要更新确认
+    # elif config.env_id == "Hopper-v2":
+    #     config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '3x1', "agent_obsk": 1,} 
 
-    # combine dir
-    if config.env_id in ['HalfCheetah-v2']:
-        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
-    elif config.env_id in ['Ant-v2']:
-        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-2x4-{config.data_type}.hdf5"
-    elif config.env_id in ['Hopper-v2']:
-        config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-3x1-{config.data_type}.hdf5"
+    # # combine dir
+    # if config.env_id in ['HalfCheetah-v2']:
+    #     config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
+    # elif config.env_id in ['Ant-v2']:
+    #     config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-2x4-{config.data_type}.hdf5"
+    # elif config.env_id in ['Hopper-v2']:
+    #     config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-3x1-{config.data_type}.hdf5"
+
+
+    # combine dir for mpe datasets
+    if config.env_id in ['simple_spread']:
+        config.dataset_dir = f"{config.dataset_dir}/simple_spread/{config.data_type}/seed_{config.dataset_num}_data"
+    elif config.env_id in ['simple_tag']:
+        config.dataset_dir = f"{config.dataset_dir}/simple_tag/{config.data_type}/seed_{config.dataset_num}_data"
+    elif config.env_id in ['simple_world']:
+        config.dataset_dir = f"{config.dataset_dir}/simple_world/{config.data_type}/seed_{config.dataset_num}_data"
+
+
+
+    print(f"Training GMM OMSD {config.env_id}: {config.data_type}: Dataset Num {config.dataset_num}: GMM Components {config.n_gmm_components}")
+
 
     offline_train(config) 
 

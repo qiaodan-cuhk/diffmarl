@@ -62,6 +62,24 @@ class ConditionalGMM(nn.Module):
         return torch.logsumexp(log_pi + log_n, dim=-1)
 
 
+def scale_gmm_behavior_vec(behavior_vec: torch.Tensor, weight=1.0, l2norm=False) -> torch.Tensor:
+    """
+    GMM 的 ∇_a log p 范数通常远大于扩散里 episilon*wt；先缩放（可选 L2 归一化）再进 SRPO loss，
+    使 (behavior·a) 与 β*(guidance·a) 可比，β 扫描才有意义。
+    - gmm_behavior_weight: 全局标量，默认 0.02
+    - gmm_behavior_l2norm: True 时按样本 L2 归一化后再乘 weight（保方向、分量比例）
+    - flip_gmm_behavior_score: True 时用 -∇log p（与扩散 score 符号不一致时可试）
+    """
+    # sign = -1.0 if getattr(args, "flip_gmm_behavior_score", False) else 1.0
+    w = float(weight)
+    # v = sign * behavior_vec
+    if l2norm:
+        denom = behavior_vec.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+        behavior_vec = behavior_vec / denom
+    return w * behavior_vec
+
+
+
 def gmm_score_at_a(gmm_module: ConditionalGMM, detach_a: torch.Tensor, cond: torch.Tensor):
     """
     策略更新用：在 detach_a 上算 ∇_a log p(a|cond)。
@@ -77,6 +95,11 @@ def gmm_score_at_a(gmm_module: ConditionalGMM, detach_a: torch.Tensor, cond: tor
     vec = torch.autograd.grad(
         log_p.sum(), detach_a, retain_graph=True, create_graph=False
     )[0]
+
+    # 处理GMM的归一化问题
+    # print(f"vec norm: {vec.norm(dim=-1, keepdim=True).mean()}")
+    vec = scale_gmm_behavior_vec(vec, weight=1.0, l2norm=True)
+    # print(f"vec norm: {vec.norm(dim=-1, keepdim=True).mean()}")
     return vec.detach()
 
 
@@ -97,7 +120,7 @@ class SRPO_GMM(nn.Module):
         super().__init__()
         cond_dim = input_dim - output_dim
         n_comp = getattr(args, "n_gmm_components", 8)
-        hidden = getattr(args, "gmm_hidden_dim", 256)
+        hidden = getattr(args, "gmm_hidden_dim", 512)
         self.gmm_score_model = ConditionalGMM(
             cond_dim, output_dim, n_comp, hidden_dim=hidden
         ).to(args.device)
@@ -173,7 +196,7 @@ class SRPO_GMM_CTDE(nn.Module):
         # 与 ScoreNet 一致：condition 维 = input_dim - output_dim（此处即局部观测 s）
         cond_dim = input_dim - output_dim
         n_comp = getattr(args, "n_gmm_components", 8)
-        hidden = getattr(args, "gmm_hidden_dim", 256)
+        hidden = getattr(args, "gmm_hidden_dim", 512)
         self.gmm_score_model = ConditionalGMM(
             cond_dim, output_dim, n_comp, hidden_dim=hidden
         ).to(args.device)
@@ -306,7 +329,7 @@ class SRPO_GMM_ssd(nn.Module):
         super().__init__()
         cond_dim = input_dim - output_dim
         n_comp = getattr(args, "n_gmm_components", 8)
-        hidden = getattr(args, "gmm_hidden_dim", 256)
+        hidden = getattr(args, "gmm_hidden_dim", 512)
         self.gmm_score_model = ConditionalGMM(
             cond_dim, output_dim, n_comp, hidden_dim=hidden
         ).to(args.device)
@@ -442,7 +465,7 @@ class MASRPO_Behavior_GMM(nn.Module):
         super().__init__()
         cond_dim = input_dim - output_dim
         n_comp = getattr(args, "n_gmm_components", 8)
-        hidden = getattr(args, "gmm_hidden_dim", 256)
+        hidden = getattr(args, "gmm_hidden_dim", 512)
 
         self.gmm_score_model = ConditionalGMM(
             cond_dim, output_dim, n_comp, hidden_dim=hidden

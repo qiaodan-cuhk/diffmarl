@@ -13,7 +13,7 @@ def convert_max_min_to_mean_var(max_vals, min_vals):
     return means, variances
 
 # 数据
-algorithms = ['IQL', 'BRPO-IND', 'BRPO-IGO', 'OMSD']
+algorithms = ['IQL', 'BRPO-IND', 'BRPO-CTDE', 'OMSD']
 
 
 
@@ -28,21 +28,41 @@ algorithms = ['IQL', 'BRPO-IND', 'BRPO-IGO', 'OMSD']
 # min_random = np.array([234, 289, 301, 402])  # 请替换为实际数据
 
 
-# simple_tag
+# simple_tag (Predator Prey) — IQL/BRPO-IND/BRPO-IGO/OMSD 为读图约值
+# Expert
+max_expert = np.array([201, 271, 282, 309])
+min_expert = np.array([171, 261, 272, 298])
 
+# Medium
+max_medium = np.array([132, 182, 192, 258])
+min_medium = np.array([108, 161, 172, 251])
+
+# Random
+max_random = np.array([122, 157, 152, 248])
+min_random = np.array([73, 107, 102, 234])
 
 
 
 # simple_world
-# Expert数据
-max_expert = np.array([120, 125, 132, 142])  # 请替换为实际数据
-min_expert = np.array([114, 120, 122, 130])  # 请替换为实际数据
-# Medium数据
-max_medium = np.array([95.1, 100, 113, 135])  # 请替换为实际数据
-min_medium = np.array([91.4, 92, 91, 130])  # 请替换为实际数据
-# Random数据
-max_random = np.array([42, 55, 59, 125])  # 请替换为实际数据
-min_random = np.array([37, 42, 35, 110])  # 请替换为实际数据
+# # Expert数据
+# max_expert = np.array([120, 125, 132, 142])  # 请替换为实际数据
+# min_expert = np.array([114, 120, 122, 130])  # 请替换为实际数据
+# # Medium数据
+# max_medium = np.array([95.1, 100, 113, 135])  # 请替换为实际数据
+# min_medium = np.array([91.4, 92, 91, 130])  # 请替换为实际数据
+# # Random数据
+# max_random = np.array([42, 55, 59, 125])  # 请替换为实际数据
+# min_random = np.array([37, 42, 35, 110])  # 请替换为实际数据
+
+
+
+# simple_spread
+# dataset_means = [516.8, 246.7, 159.8]
+# simple_tag
+dataset_means = [186.0, 115.0, -1.5]
+# simple world
+# dataset_means = [79.5, 24.7, -6.8]
+
 
 # 计算均值和误差
 rewards_expert, errors_expert = convert_max_min_to_mean_var(max_expert, min_expert)
@@ -84,10 +104,6 @@ for i in range(len(algorithms)):
             ecolor='black',
             label=algorithms[i])
 
-# simple_spread
-# dataset_means = [516.8, 246.7, 159.8]
-
-dataset_means = [79.5, 24.7, -6.8]
 # 为每组添加平均质量虚线
 for i, mean_value in enumerate(dataset_means):
     # 计算每组的横线范围（覆盖该组所有柱状图的宽度）

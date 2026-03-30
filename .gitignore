@@ -18,6 +18,7 @@ bash/
 upload_ckpts/
 
 ablation_diffusion_Logs/
+ablation_gmm_Logs/
 
 
 

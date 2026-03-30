@@ -1,0 +1,11 @@
+离线策略支持集量化方案 (Joint Action Space Support Distance)
+
+1. 实验目标 (Objective)量化评估不同模型生成的联合动作 $\mathbf{a}_{gen}$ 与离线数据集 $\mathcal{D}$ 的原始分布之间的距离，证明 OMSD 能比基线模型更严谨地留在数据集的“支持集（Support）”内，有效抑制组合模式偏移（Combinatorial Mode Shift）。
+
+2. 数据准备与预处理 (Data Preparation)数据集 (Offline Buffer)：加载原始训练数据集，包含所有 $(s, a)$ 对。状态归一化 (State Normalization)：由于 $s$ 包含位置、速度等不同量纲，必须对状态进行归一化（如 Min-Max 或 Z-Score），否则距离计算将被量级大的维度主导。联合动作空间 (Joint Action Space)：动作必须以“联合”形式处理（例如 MPE 任务中 3 个 Agent 的 2 维动作拼成 6 维向量），这是验证协同 OOD 的关键。
+
+3. 计算逻辑与步骤 (Core Algorithm)第一阶段：构建状态索引 (Indexing)使用高效的空分索引结构（如 scipy.spatial.cKDTree）对数据集中的所有状态进行索引：$$Tree = \text{KDTree}(\{s_1, s_2, \dots, s_N\})$$第二阶段：采样与生成 (Sampling & Inference)随机采样：从数据集中随机抽取 $N_{test} = 5000$ 个状态样本 $s_{sample}$ 作为测试点。模型推理：将 $s_{sample}$ 分别输入 OMSD 以及对比基线（MADiff-D, DoF-P, BPRO-CTDE）。获得各算法生成的联合动作集 $\mathbf{a}_{gen} \in \mathbb{R}^{5000 \times 6}$。第三阶段：支持集距离计算 (Metric Calculation)对于每一个采样点 $s_i$ 及生成的动作 $\mathbf{a}_{gen, i}$：寻找状态近邻：在 $Tree$ 中搜索离 $s_i$ 最近的 $K$ 个状态索引（建议 $K=20$ 或 $50$）。提取参考动作集：从数据集中提取这 $K$ 个近邻状态对应的真实联合动作：$$\mathcal{A}_{ref, i} = \{ \mathbf{a}_{data, k_1}, \mathbf{a}_{data, k_2}, \dots, \mathbf{a}_{data, k_K} \}$$计算最近邻距离 (NND)：计算生成的动作到参考动作集中所有动作的欧氏距离，并取最小值：$$d_i = \min_{\mathbf{a} \in \mathcal{A}_{ref, i}} \| \mathbf{a}_{gen, i} - \mathbf{a} \|_2$$统计汇总：计算 5000 个样本的平均距离 $\mu(d)$ 和标准差 $\sigma(d)$。4. 预期输出与可视化建议指标表 (Table)：对比不同算法的 Mean NND $\pm$ Std.距离分布直方图 (Distance Histogram)：横轴：NND 距离值。纵轴：频率（密度）。预期：OMSD 的峰值应更窄、更靠近原点。OOD 违反率 (Violation Rate)：定义阈值 $\tau$（如数据集内部动作 NND 的 95 分位数）。计算 $d_i > \tau$ 的样本占比。5. 给开发 AI 的技术提示 (Technical Tips for Implementation)Batch 处理：在计算 $d_i$ 时，建议使用 Numpy 的广播机制（Broadcasting）一次性计算 $\mathbf{a}_{gen, i}$ 到 $\mathcal{A}_{ref, i}$ 中 $K$ 个动作的距离，提高效率。KDTree 效率：确保在构建 Tree 时只使用状态特征。对于 MPE 这种 18-30 维左右的状态空间，cKDTree 的查询速度极快。维度对齐：务必确认 $a_{gen}$ 和 $a_{data}$ 的 Agent 拼接顺序完全一致（例如永远是 [Agent1, Agent2, Agent3]），否则计算出的 6 维距离将失去物理意义。
+
+
+
+核心执行逻辑：三步走数据对齐（Alignment）：从你的 Rollout 轨迹 中提取一个样本点 $(s_{roll}, a_{roll})$。在 Offline Dataset 中，寻找与 $s_{roll}$ 物理距离最近的 $K$ 个状态（建议 $K \ge 10$，3 个可能太少，难以覆盖多模态）。动作提取（Retrieval）：把这 $K$ 个数据集中最像的状态所对应的 Joint Action 全部拿出来，组成一个“参考集” $\mathcal{A}_{ref} = \{a_{data, 1}, a_{data, 2}, \dots, a_{data, K}\}$。距离计算（Min-Distance）：计算你的 $a_{roll}$ 到这个参考集中每一个动作的欧氏距离。取最小值：$d = \min \| a_{roll} - a_{data, i} \|_2$。这个 $d$ 就代表了：“即便在我的策略跑出来的状态下，我的动作是否依然在数据集中类似状态的‘许可范围’内？”
