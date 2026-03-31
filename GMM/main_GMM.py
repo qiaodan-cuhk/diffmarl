@@ -19,7 +19,6 @@ from torch.autograd import Variable
 # from tensorboard_logger import log_value, configure
 from torch.utils.tensorboard import SummaryWriter
 
-import sys
 from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:

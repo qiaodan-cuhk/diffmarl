@@ -619,10 +619,10 @@ class CTDE_SRPO(BASE_SRPO):
                                 "a_joint": joint_a,
                 }
             else:
-                sample_bridge = {"s": samples[agent_id]["state"],
+                sample_bridge = {"s": samples[agent_id]["obs"],
                                 "a": samples[agent_id]["action"],
                                 "r": samples[agent_id]["rewards"],
-                                "s_": samples[agent_id]["next_state"],
+                                "s_": samples[agent_id]["next_obs"],
                                 "d": samples[agent_id]["done"],
                                 "s_joint": joint_states,
                                 "a_joint": joint_a,

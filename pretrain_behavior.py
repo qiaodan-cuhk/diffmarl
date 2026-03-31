@@ -14,6 +14,12 @@ from utils.buffer import ReplayBuffer
 from utils.make_env import make_env
 from utils.env_wrappers import DummyVecEnv
 
+import sys
+from pathlib import Path
+_root = Path(__file__).resolve().parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 
 # try:
 #     from multiagent_mujoco.mujoco_multi import MujocoMulti
@@ -52,12 +58,31 @@ def marginal_prob_std(t, device="cuda",beta_1=20.0,beta_0=0.1):
     return alpha_t, std
 
 
+def ensure_conditional_order_list(args):
+    """Parse args.conditional_order into args.conditional_order_list (list[int])."""
+    raw = getattr(args, "conditional_order", None)
+    if raw is None:
+        order = list(range(args.agent_num))
+    elif isinstance(raw, str):
+        order = [int(x) for x in raw.split("-") if x != ""]
+    else:
+        order = list(raw)
+    if len(order) != args.agent_num:
+        raise ValueError(
+            f"conditional_order length {len(order)} is not equal to agent_num {args.agent_num}"
+        )
+    args.conditional_order_list = order
+
+
 def train_ind_behavior(args, score_model, data_loader, agent_num, writer, start_epoch=0):
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 50
-    best_loss = 1e3
+    epoch_save_interval = args.save_interval
+    # best_loss = 1e3
+
+    save_dir = os.path.join("/data/qiaodan/code/diffmarl/SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND")
+    os.makedirs(save_dir, exist_ok=True)
 
     for epoch in tqdm_epoch:
         avg_loss = 0.
@@ -81,23 +106,25 @@ def train_ind_behavior(args, score_model, data_loader, agent_num, writer, start_
             # args.run.log({"loss/diffusion": score_model.loss.detach().cpu().numpy()}, step=epoch+1)
 
         """ Save models """
-        if args.save_model and epoch_loss < best_loss:
-            best_loss = epoch_loss
-            print("New lowest loss in epoch {}, Save best models".format(epoch))
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "best_diffusion_{}.pth".format(agent_num)))
-            # SRPO_premodels/env_id_level/IND/best_diffusion_i.pth
+        # if args.save_model and epoch_loss < best_loss:
+        #     best_loss = epoch_loss
+        #     print("New lowest loss in epoch {}, Save best models".format(epoch))
+        #     torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "best_diffusion_{}.pth".format(agent_num)))
+        #     # SRPO_premodels/env_id_level_seed/IND/best_diffusion_i.pth
         
         if args.save_model and epoch % epoch_save_interval == (epoch_save_interval - 1): 
+            
             print("Save models: Epoch {}".format(epoch))
-            torch.save(score_model.state_dict(), os.path.join("./SRPO_premodels", f"{args.env_id}_{args.data_type}", "IND", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
-            # SRPO_premodels/env_id_level/IND/diffusion_i_epoch150.pth   
+            # torch.save(score_model.state_dict(), os.path.join("/data/qiaodan/code/diffmarl/SRPO_premodels", f"{args.env_id}_{args.data_type}_seed{args.dataset_num}", "IND", "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+            torch.save(score_model.state_dict(), os.path.join(save_dir, "diffusion_{}_epoch{}.pth".format(agent_num, epoch)))
+            # SRPO_premodels/env_id_level_seed/IND/diffusion_i_epoch150.pth   
         
 # MPE 的 JAL 需要修改
 def train_joint_behavior(args, score_model, data_loader, writer, start_epoch=0):
     n_epochs = 200
     tqdm_epoch = tqdm.trange(start_epoch, n_epochs)
     evaluation_inerval = 1
-    epoch_save_interval = 50
+    epoch_save_interval = args.save_interval
     best_loss = 1e3
 
     for epoch in tqdm_epoch:
@@ -239,15 +266,18 @@ def train_joint_behavior(args, score_model, data_loader, writer, start_epoch=0):
 def train_seq_behavior(args, score_model, data_loader, agent_num, writer, start_epoch=0):
 
     # 支持指定的扰动顺序
-    conditional_order = getattr(args, "conditional_order", None)
-    if conditional_order is None:
-        conditional_order = list(range(args.agent_num))
+    # conditional_order = getattr(args, "conditional_order", None)
+    # if conditional_order is None:
+    #     conditional_order = list(range(args.agent_num))
 
-    if isinstance(conditional_order, str):
-        conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
+    # if isinstance(conditional_order, str):
+    #     conditional_order = [int(x) for x in conditional_order.split("-") if x != ""]
 
-    if len(conditional_order) != args.agent_num:
-        raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to agent_num {args.agent_num}")
+    # if len(conditional_order) != args.agent_num:
+    #     raise ValueError(f"conditional_order length {len(conditional_order)} is not equal to agent_num {args.agent_num}")
+
+    conditional_order = args.conditional_order_list
+
     if agent_num not in conditional_order:
         raise ValueError(f"agent {agent_num} is not in conditional_order {conditional_order}")
 
@@ -438,14 +468,15 @@ def behavior(args):
             [acsp.shape[0] if isinstance(acsp, Box) else acsp.n for acsp in env.action_space], device = args.device
         )
 
-
-    # replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
-    replay_buffer.load_batch_data_omiga(args.dataset_dir, rew_scale=args.rew_scale)
+    if args.env_id in ['simple_spread', 'simple_tag', 'simple_world', 'bandit']:
+        replay_buffer.load_batch_data(args.dataset_dir, rew_scale = args.rew_scale)
+    elif args.env_id in ['HalfCheetah-v2', 'Ant-v2', 'Hopper-v2']:
+        replay_buffer.load_batch_data_omiga(args.dataset_dir, rew_scale=args.rew_scale)
 
 
     """ Train Log Dir """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tb_log_path = os.path.join("/data/qiaodan/code/diffmarl/ablation_diffusion_Logs",
+    tb_log_path = os.path.join("/data/qiaodan/code/diffmarl/Diffusion_Logs",
                                "{}".format(str(args.env_id)),
                                "{}".format(args.data_type),
                                "{}_agent{}_{}".format(args.srpo_mode, args.seq_agent_id, timestamp))
@@ -462,9 +493,20 @@ def behavior(args):
 
 
     print("training behavior")
+    # if args.srpo_mode == 'CTDE' or args.srpo_mode == 'IND':
+    #     for i in range(agent_num):
+    #         train_ind_behavior(args, score_model[i], replay_buffer, i, writer, start_epoch=0)
     if args.srpo_mode == 'CTDE' or args.srpo_mode == 'IND':
-        for i in range(agent_num):
-            train_ind_behavior(args, score_model[i], replay_buffer, i, writer, start_epoch=0)
+        if not (0 <= args.seq_agent_id < agent_num):
+            raise ValueError(f"seq_agent_id {args.seq_agent_id} out of range [0, {agent_num - 1}]")
+        train_ind_behavior(
+            args,
+            score_model[args.seq_agent_id],
+            replay_buffer,
+            args.seq_agent_id,
+            writer,
+            start_epoch=0
+        )
     elif args.srpo_mode == 'JAL':
         train_joint_behavior(args, score_model, replay_buffer, writer, start_epoch=0)
     elif args.srpo_mode == 'Seq':
@@ -481,9 +523,9 @@ def pretrain_behavior_args():
 
     """   Changable params by users   """
     # Dataset selection  e.g. "simple spread_medium_0"
-    parser.add_argument("--env_id", default='HalfCheetah-v2', type=str, help="Name of environment") # HalfCheetah-v2 bandit
+    parser.add_argument("--env_id", default='simple_tag', type=str, help="Name of environment") # HalfCheetah-v2 bandit
     parser.add_argument("--data_type", default='expert', type=str)  # medium-replay
-    # parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")
+    parser.add_argument("--dataset_num", default=0, type=int, help="Dataset seed number from 0-4")  # for MPE
     parser.add_argument("--seq_agent_id", default=2, type=int)  # 加速训练，直接指定训练某一个agent 0 or 1
     # train mode
     parser.add_argument("--log_interval", default=1, type=int)
@@ -512,12 +554,10 @@ def pretrain_behavior_args():
     # continuous MPE default False
     parser.add_argument("--discrete_action", action='store_true', default=False)
 
-    parser.add_argument("--conditional_order", default="1-2-0", type=str)
+    parser.add_argument("--conditional_order", default="0-1-2", type=str)
 
     # mixed datasets
     # parser.add_argument("--mixed_data", action='store_true', default=False)
-
-
     # parser.add_argument("--eval_models", default=False, type=bool)
 
     config = parser.parse_args()
@@ -530,13 +570,20 @@ def pretrain_behavior_args():
     elif config.env_id == "Hopper-v2":
         config.env_args = {"scenario": config.env_id, "episode_limit": 1000, "agent_conf": '3x1', "agent_obsk": 1,} 
 
+
+
     # combine dir
-    if config.env_id in ['HalfCheetah-v2']:
+    if config.env_id in ['simple_spread', 'simple_tag', 'simple_world']:
+        config.dataset_dir = f"{config.dataset_dir}/{config.env_id}/{config.data_type}/seed_{config.dataset_num}_data"
+    elif config.env_id in ['HalfCheetah-v2']:
         config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-6x1-{config.data_type}.hdf5"
     elif config.env_id in ['Ant-v2']:
         config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-2x4-{config.data_type}.hdf5"
     elif config.env_id in ['Hopper-v2']:
         config.dataset_dir = f"{config.dataset_dir}/omiga/{config.env_id}-3x1-{config.data_type}.hdf5"
+    elif config.env_id in ['bandit']:
+        config.dataset_dir = f"{config.dataset_dir}/{config.env_id}"
+
 
 
     if config.use_gpu:
